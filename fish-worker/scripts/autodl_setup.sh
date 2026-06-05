@@ -54,6 +54,7 @@ install_base_packages() {
       git \
       git-lfs \
       libsndfile1 \
+      python3-pip \
       build-essential \
       pkg-config
     git lfs install --skip-repo || true
@@ -115,6 +116,7 @@ fi
 PROJECT_ROOT="$(cd "${WORKER_DIR}/.." && pwd)"
 VENV_DIR="${VENV_DIR:-${WORKER_DIR}/.venv}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}}"
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 TORCH_VERSION="${TORCH_VERSION:-2.8.0}"
 TORCH_CUDA_VERSION="${TORCH_CUDA_VERSION:-12.8}"
@@ -127,13 +129,22 @@ INSTALL_SGLANG="${INSTALL_SGLANG:-1}"
 INSTALL_FLASHINFER="${INSTALL_FLASHINFER:-0}"
 FLASHINFER_INDEX_URL="${FLASHINFER_INDEX_URL:-https://flashinfer.ai/whl/cu128/torch2.8/}"
 
+export PIP_INDEX_URL="${PIP_INDEX_URL:-${PYPI_INDEX_URL}}"
+export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${PYPI_INDEX_URL}}"
+
 log "worker dir: ${WORKER_DIR}"
 install_base_packages
 
 if ! command -v uv >/dev/null 2>&1; then
-  log "installing uv"
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="${HOME}/.local/bin:${PATH}"
+  log "installing uv from ${PYPI_INDEX_URL}"
+  if python3 -m pip --version >/dev/null 2>&1; then
+    python3 -m pip install --user --upgrade uv -i "${PYPI_INDEX_URL}"
+    export PATH="${HOME}/.local/bin:${PATH}"
+  else
+    warn "python3 pip not found; falling back to uv installer"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="${HOME}/.local/bin:${PATH}"
+  fi
 fi
 command -v uv >/dev/null 2>&1 || fail "uv is not on PATH after installation"
 
@@ -170,7 +181,7 @@ log "installing fish-worker dependencies"
   UV_PROJECT_ENVIRONMENT="${VENV_DIR}" uv sync --no-dev --inexact
 )
 
-uv pip install --python "${VENV_PYTHON}" --upgrade pip setuptools wheel packaging ninja
+uv pip install --python "${VENV_PYTHON}" --index-url "${PYPI_INDEX_URL}" --upgrade pip setuptools wheel packaging ninja
 
 if [ "${INSTALL_TORCH}" = "0" ]; then
   log "skipping PyTorch install because INSTALL_TORCH=0"
@@ -201,7 +212,7 @@ fi
 
 if [ "${INSTALL_SGLANG}" = "1" ]; then
   log "installing ${SGLANG_INSTALL_SPEC}"
-  uv pip install --python "${VENV_PYTHON}" --upgrade "${SGLANG_INSTALL_SPEC}"
+  uv pip install --python "${VENV_PYTHON}" --index-url "${PYPI_INDEX_URL}" --upgrade "${SGLANG_INSTALL_SPEC}"
 fi
 
 log "validating torch"

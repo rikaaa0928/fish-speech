@@ -47,6 +47,8 @@ The setup script installs `uv`, creates `.venv`, reuses the AutoDL image's PyTor
 
 Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment.
 
+Python dependencies use the Tsinghua PyPI mirror by default: `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`. Override it if needed. PyTorch CUDA wheels still use `PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu128` unless `PYTORCH_INDEX_URL` is set explicitly.
+
 If you copied only the script to a fresh machine, set `REPO_URL` and optionally `REPO_REF` so it can clone the project first.
 
 ## Important Environment
