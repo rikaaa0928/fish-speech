@@ -1,0 +1,61 @@
+# fish-worker
+
+Outbound GPU worker bridge for `fish-manager` and local SGLang-Omni.
+
+The worker is designed for rented GPU machines. It opens an outbound WebSocket to the manager, so the GPU host does not need a stable public inbound address.
+
+## Run With Docker
+
+```bash
+cp .env.example .env
+# edit MANAGER_URL and WORKER_TOKEN
+docker compose up --build
+```
+
+The container downloads `fishaudio/s2-pro` into `./models` if the model directory is empty, starts SGLang-Omni, waits for health, and connects to the manager.
+
+## Run With uv
+
+```bash
+cp .env.example .env
+set -a
+source .env
+set +a
+uv sync
+bash scripts/start.sh
+```
+
+Do not run this on a non-GPU machine unless `WORKER_MANAGE_SGLANG=0` and a compatible SGLang server is already available at `SGLANG_HOST:SGLANG_PORT`.
+
+## AutoDL Bare Metal
+
+Use this on an AutoDL instance created from the PyTorch 2.8 / CUDA 12.8 image:
+
+```bash
+MANAGER_URL=wss://your-manager.example.com/internal/workers/ws \
+WORKER_TOKEN=replace-me \
+bash scripts/autodl_setup.sh
+```
+
+Start the worker after setup:
+
+```bash
+bash scripts/autodl_start.sh
+```
+
+The setup script installs `uv`, creates `.venv`, installs PyTorch `2.8.0+cu128`, installs SGLang, writes `.env`, and downloads `fishaudio/s2-pro` to `/root/autodl-fs/models` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
+
+If you copied only the script to a fresh machine, set `REPO_URL` and optionally `REPO_REF` so it can clone the project first.
+
+## Important Environment
+
+- `MANAGER_URL`: manager worker WebSocket endpoint, for example `wss://example.com/internal/workers/ws`.
+- `WORKER_TOKEN`: worker registration token. This is not the public OpenAI API key.
+- `MODEL_ID`: Hugging Face model ID, default `fishaudio/s2-pro`.
+- `MODEL_DIR`: local model directory.
+- `SGLANG_MAX_RUNNING_REQUESTS`: SGLang concurrency limit.
+- `SGLANG_MAX_QUEUED_REQUESTS`: SGLang queue limit.
+- `WORKER_MAX_INFLIGHT`: worker-side local inflight limit.
+- `WORKER_MAX_QUEUE`: worker-side local queue allowance.
+
+For realtime behavior, start with `SGLANG_MAX_RUNNING_REQUESTS=2`, `SGLANG_MAX_QUEUED_REQUESTS=0`, `WORKER_MAX_INFLIGHT=2`, and `WORKER_MAX_QUEUE=0`, then tune per GPU.

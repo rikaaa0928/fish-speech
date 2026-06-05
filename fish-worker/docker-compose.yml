@@ -1,0 +1,12 @@
+services:
+  fish-worker:
+    build: .
+    restart: unless-stopped
+    shm_size: "32g"
+    ipc: host
+    gpus: all
+    env_file:
+      - .env
+    volumes:
+      - ./models:/models
+      - ./cache:/cache

@@ -1,0 +1,18 @@
+[project]
+name = "fish-worker"
+version = "0.1.0"
+description = "Outbound GPU worker bridge for fish-manager and SGLang-Omni"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.10.0",
+    "huggingface-hub>=0.26.0",
+    "msgpack>=1.1.0",
+    "websockets>=13.0,<16.0",
+]
+
+[project.scripts]
+fish-worker = "fish_worker.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
