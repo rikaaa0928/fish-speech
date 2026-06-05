@@ -43,7 +43,9 @@ Start the worker after setup:
 bash scripts/autodl_start.sh
 ```
 
-The setup script installs `uv`, creates `.venv`, installs PyTorch `2.8.0+cu128`, installs SGLang, writes `.env`, and downloads `fishaudio/s2-pro` to `/root/autodl-fs/models` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
+The setup script installs `uv`, creates `.venv`, reuses the AutoDL image's PyTorch `2.8.x` / CUDA `12.8` when available, installs PyTorch `2.8.0+cu128` only when missing or incompatible, installs SGLang, writes `.env`, and downloads `fishaudio/s2-pro` to `/root/autodl-fs/models` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
+
+Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment.
 
 If you copied only the script to a fresh machine, set `REPO_URL` and optionally `REPO_REF` so it can clone the project first.
 

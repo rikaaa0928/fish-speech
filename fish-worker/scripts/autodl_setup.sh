@@ -64,6 +64,30 @@ install_base_packages() {
   fi
 }
 
+torch_matches() {
+  EXPECTED_TORCH_PREFIX="${TORCH_VERSION%.*}." EXPECTED_TORCH_CUDA="${TORCH_CUDA_VERSION}" "${VENV_PYTHON}" - <<'PY'
+import os
+import sys
+
+try:
+    import torch
+except Exception as exc:  # noqa: BLE001
+    print(f"torch_import_error={exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+expected_prefix = os.environ["EXPECTED_TORCH_PREFIX"]
+expected_cuda = os.environ["EXPECTED_TORCH_CUDA"]
+print(f"torch={torch.__version__}")
+print(f"torch_cuda={torch.version.cuda}")
+print(f"cuda_available={torch.cuda.is_available()}")
+
+if not torch.__version__.startswith(expected_prefix):
+    raise SystemExit(1)
+if torch.version.cuda != expected_cuda:
+    raise SystemExit(1)
+PY
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKER_DIR="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd || true)"
 INSTALL_ROOT="${INSTALL_ROOT:-/root/autodl-tmp/fish-speech}"
@@ -93,8 +117,11 @@ VENV_DIR="${VENV_DIR:-${WORKER_DIR}/.venv}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 TORCH_VERSION="${TORCH_VERSION:-2.8.0}"
+TORCH_CUDA_VERSION="${TORCH_CUDA_VERSION:-12.8}"
 TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.23.0}"
 TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.8.0}"
+INSTALL_TORCH="${INSTALL_TORCH:-auto}"
+VENV_SYSTEM_SITE_PACKAGES="${VENV_SYSTEM_SITE_PACKAGES:-1}"
 SGLANG_INSTALL_SPEC="${SGLANG_INSTALL_SPEC:-sglang[all]}"
 INSTALL_SGLANG="${INSTALL_SGLANG:-1}"
 INSTALL_FLASHINFER="${INSTALL_FLASHINFER:-0}"
@@ -130,7 +157,11 @@ else
 fi
 
 log "creating venv at ${VENV_DIR}"
-uv venv "${VENV_DIR}" --python "${PYTHON_BIN}"
+if [ "${VENV_SYSTEM_SITE_PACKAGES}" = "1" ]; then
+  uv venv "${VENV_DIR}" --python "${PYTHON_BIN}" --system-site-packages
+else
+  uv venv "${VENV_DIR}" --python "${PYTHON_BIN}"
+fi
 VENV_PYTHON="${VENV_DIR}/bin/python"
 
 log "installing fish-worker dependencies"
@@ -139,12 +170,28 @@ log "installing fish-worker dependencies"
   UV_PROJECT_ENVIRONMENT="${VENV_DIR}" uv sync --no-dev --inexact
 )
 
-log "installing PyTorch ${TORCH_VERSION} CUDA 12.8 wheels"
 uv pip install --python "${VENV_PYTHON}" --upgrade pip setuptools wheel packaging ninja
-uv pip install --python "${VENV_PYTHON}" --index-url "${PYTORCH_INDEX_URL}" \
-  "torch==${TORCH_VERSION}" \
-  "torchvision==${TORCHVISION_VERSION}" \
-  "torchaudio==${TORCHAUDIO_VERSION}"
+
+if [ "${INSTALL_TORCH}" = "0" ]; then
+  log "skipping PyTorch install because INSTALL_TORCH=0"
+elif [ "${INSTALL_TORCH}" = "1" ]; then
+  log "installing PyTorch ${TORCH_VERSION} CUDA ${TORCH_CUDA_VERSION} wheels"
+  uv pip install --python "${VENV_PYTHON}" --index-url "${PYTORCH_INDEX_URL}" \
+    "torch==${TORCH_VERSION}" \
+    "torchvision==${TORCHVISION_VERSION}" \
+    "torchaudio==${TORCHAUDIO_VERSION}"
+else
+  log "checking existing PyTorch before installing"
+  if torch_matches; then
+    log "existing PyTorch matches ${TORCH_VERSION%.*}.x CUDA ${TORCH_CUDA_VERSION}; skipping PyTorch install"
+  else
+    log "existing PyTorch is missing or incompatible; installing PyTorch ${TORCH_VERSION} CUDA ${TORCH_CUDA_VERSION} wheels"
+    uv pip install --python "${VENV_PYTHON}" --index-url "${PYTORCH_INDEX_URL}" \
+      "torch==${TORCH_VERSION}" \
+      "torchvision==${TORCHVISION_VERSION}" \
+      "torchaudio==${TORCHAUDIO_VERSION}"
+  fi
+fi
 
 if [ "${INSTALL_FLASHINFER}" = "1" ]; then
   log "installing flashinfer-python from ${FLASHINFER_INDEX_URL}"
@@ -158,16 +205,7 @@ if [ "${INSTALL_SGLANG}" = "1" ]; then
 fi
 
 log "validating torch"
-"${VENV_PYTHON}" - <<'PY'
-import torch
-print(f"torch={torch.__version__}")
-print(f"torch_cuda={torch.version.cuda}")
-print(f"cuda_available={torch.cuda.is_available()}")
-if not torch.__version__.startswith("2.8.0"):
-    raise SystemExit("expected torch 2.8.0")
-if torch.version.cuda != "12.8":
-    raise SystemExit("expected torch CUDA 12.8")
-PY
+torch_matches || fail "expected torch ${TORCH_VERSION%.*}.x with CUDA ${TORCH_CUDA_VERSION}; set INSTALL_TORCH=1 to force reinstall"
 
 if [ "${INSTALL_SGLANG}" = "1" ] && [ ! -x "${VENV_DIR}/bin/sgl-omni" ]; then
   warn "sgl-omni was not found in ${VENV_DIR}/bin; set SGLANG_COMMAND or adjust SGLANG_INSTALL_SPEC if startup fails"
