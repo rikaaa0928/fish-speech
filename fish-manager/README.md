@@ -14,7 +14,7 @@ cargo run
 
 ## AutoDL Bare Metal
 
-Clone without history, then initialize the shared AutoDL test environment from the repository root:
+Clone without history, then initialize the standard worker environment from the repository root:
 
 ```bash
 REPO_URL="https://github.com/rikaaa0928/fish-speech.git"
@@ -24,7 +24,7 @@ cd fish-speech
 bash scripts/autodl_setup.sh
 ```
 
-Build and start `fish-manager` on AutoDL:
+Build and start `fish-manager` on AutoDL for local testing:
 
 ```bash
 bash scripts/autodl_start_manager.sh
@@ -37,7 +37,7 @@ cd fish-manager
 bash scripts/autodl_start.sh
 ```
 
-The manager script installs Rust when missing, creates `fish-manager/.env` when missing, builds the Rust release binary, and starts it with data under `/root/autodl-fs/fish-manager-data` by default.
+The shared setup script prepares the worker environment only. The manager script installs Rust when missing, creates `fish-manager/.env` when missing, builds the Rust release binary, and starts it with data under `/root/autodl-fs/fish-manager-data` by default.
 
 Useful overrides:
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+export PATH="${HOME}/.local/bin:${PATH}"
 
 AUTODL_FS="${AUTODL_FS:-/root/autodl-fs}"
 REPO_DIR="${REPO_DIR:-${AUTODL_FS}/fish-speech}"
@@ -11,10 +11,6 @@ PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://mirrors.aliyun.com/pytorch-wheels/cu128}"
 UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone}"
-RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER:-https://mirrors.ustc.edu.cn/rust-static}"
-RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT:-https://mirrors.ustc.edu.cn/rust-static/rustup}"
-RUSTUP_INIT_BASE_URL="${RUSTUP_INIT_BASE_URL:-https://mirrors.ustc.edu.cn/rust-static/rustup/dist}"
-CARGO_REGISTRY_URL="${CARGO_REGISTRY_URL:-sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/}"
 TORCH_PACKAGES="${TORCH_PACKAGES:-torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0}"
 INSTALL_TORCH="${INSTALL_TORCH:-auto}"
 INSTALL_SGLANG_OMNI="${INSTALL_SGLANG_OMNI:-1}"
@@ -42,9 +38,6 @@ export PIP_INDEX_URL="${PIP_INDEX_URL:-${PYPI_INDEX_URL}}"
 export UV_INDEX_URL="${UV_INDEX_URL:-${PYPI_INDEX_URL}}"
 export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${PYPI_INDEX_URL}}"
 export UV_PYTHON_INSTALL_MIRROR
-export RUSTUP_DIST_SERVER
-export RUSTUP_UPDATE_ROOT
-export CARGO_REGISTRIES_CRATES_IO_PROTOCOL="${CARGO_REGISTRIES_CRATES_IO_PROTOCOL:-sparse}"
 
 run_root() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -128,32 +121,6 @@ ensure_uv() {
   export PATH="${HOME}/.local/bin:${PATH}"
 }
 
-configure_cargo_mirror() {
-  local cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
-  local cargo_config="${cargo_home}/config.toml"
-
-  mkdir -p "${cargo_home}"
-  if [ -f "${cargo_config}" ]; then
-    if command -v grep >/dev/null 2>&1 && grep -Fq "${CARGO_REGISTRY_URL}" "${cargo_config}"; then
-      return 0
-    fi
-    if command -v grep >/dev/null 2>&1 && grep -q '^\[source\.crates-io\]' "${cargo_config}"; then
-      log "warning: ${cargo_config} already configures crates-io; leaving it unchanged"
-      return 0
-    fi
-  fi
-
-  log "configuring Cargo crates mirror: ${CARGO_REGISTRY_URL}"
-  {
-    printf '[source.crates-io]\n'
-    printf "replace-with = 'mirror'\n\n"
-    printf '[source.mirror]\n'
-    printf 'registry = "%s"\n\n' "${CARGO_REGISTRY_URL}"
-    printf '[registries.mirror]\n'
-    printf 'index = "%s"\n' "${CARGO_REGISTRY_URL}"
-  } >>"${cargo_config}"
-}
-
 ensure_python_bin() {
   if "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1
 import sys
@@ -166,34 +133,6 @@ PY
   log "installing Python ${PYTHON_VERSION} via uv"
   uv python install "${PYTHON_VERSION}"
   PYTHON_BIN="${PYTHON_VERSION}"
-}
-
-ensure_rust() {
-  configure_cargo_mirror
-
-  if command -v cargo >/dev/null 2>&1; then
-    return 0
-  fi
-
-  local rustup_target rustup_tmp_dir rustup_init
-  case "$(uname -m)" in
-    x86_64|amd64) rustup_target="x86_64-unknown-linux-gnu" ;;
-    aarch64|arm64) rustup_target="aarch64-unknown-linux-gnu" ;;
-    *)
-      printf 'Unsupported CPU architecture for domestic rustup-init mirror: %s\n' "$(uname -m)" >&2
-      exit 1
-      ;;
-  esac
-
-  log "installing Rust toolchain from ${RUSTUP_INIT_BASE_URL}/${rustup_target}/rustup-init"
-  rustup_tmp_dir="$(mktemp -d)"
-  rustup_init="${rustup_tmp_dir}/rustup-init"
-  curl --proto '=https' --tlsv1.2 -sSf "${RUSTUP_INIT_BASE_URL}/${rustup_target}/rustup-init" -o "${rustup_init}"
-  chmod +x "${rustup_init}"
-  "${rustup_init}" -y --profile minimal
-  rm -rf "${rustup_tmp_dir}"
-  # shellcheck disable=SC1091
-  source "${HOME}/.cargo/env"
 }
 
 generate_secret() {
@@ -429,7 +368,6 @@ main() {
 
   ensure_uv
   ensure_python_bin
-  ensure_rust
   load_existing_envs "${repo_root}"
   setup_worker_venv "${repo_root}/fish-worker"
   install_torch_if_needed "${repo_root}/fish-worker/.venv/bin/python"
@@ -439,8 +377,8 @@ main() {
   download_model "${repo_root}/fish-worker"
 
   log "done"
-  log "start manager: bash ${repo_root}/scripts/autodl_start_manager.sh"
   log "start worker:  bash ${repo_root}/scripts/autodl_start_worker.sh"
+  log "optional local manager test: bash ${repo_root}/scripts/autodl_start_manager.sh"
 }
 
 main "$@"

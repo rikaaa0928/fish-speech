@@ -53,7 +53,7 @@ Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip P
 
 Python dependencies use the Tsinghua PyPI mirror by default: `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`. PyTorch CUDA wheels use the Aliyun PyTorch wheel mirror by default: `PYTORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
 
-Rust setup uses domestic mirrors by default: rustup downloads from `RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static`, and Cargo crates use `CARGO_REGISTRY_URL=sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/`.
+`scripts/autodl_setup.sh` prepares the standard worker environment only. Rust is installed by `scripts/autodl_start_manager.sh` when you need to run a local manager for testing.
 
 If you copied only the root `scripts/autodl_setup.sh` to a fresh machine, set `REPO_URL` and optionally `REPO_REF` so it can clone the project first.
 
