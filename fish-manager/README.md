@@ -12,6 +12,41 @@ set +a
 cargo run
 ```
 
+## AutoDL Bare Metal
+
+Clone without history, then initialize the shared AutoDL test environment from the repository root:
+
+```bash
+git clone --depth 1 https://github.com/fishaudio/fish-speech.git
+cd fish-speech
+bash scripts/autodl_setup.sh
+```
+
+Build and start `fish-manager` on AutoDL:
+
+```bash
+bash scripts/autodl_start_manager.sh
+```
+
+From the repository root, you can also run the `fish-manager` wrapper:
+
+```bash
+cd fish-manager
+bash scripts/autodl_start.sh
+```
+
+The manager script installs Rust when missing, creates `fish-manager/.env` when missing, builds the Rust release binary, and starts it with data under `/root/autodl-fs/fish-manager-data` by default.
+
+Useful overrides:
+
+- `MANAGER_BIND_ADDR=0.0.0.0:8080`
+- `OPENAI_API_KEYS=sk-live-1,sk-live-2`
+- `WORKER_TOKEN=replace-me`
+- `AUTODL_FS=/root/autodl-fs`
+- `MANAGER_PROFILE=debug`
+- `CARGO_REGISTRY_URL=sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/`
+- `RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static`
+
 Public APIs use OpenAI-compatible authentication:
 
 ```http

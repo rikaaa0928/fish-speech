@@ -29,9 +29,11 @@ Do not run this on a non-GPU machine unless `WORKER_MANAGE_SGLANG=0` and a compa
 
 ## AutoDL Bare Metal
 
-Use this on an AutoDL instance created from the PyTorch 2.8 / CUDA 12.8 image:
+Use this on an AutoDL instance created from the PyTorch 2.8 / CUDA 12.8 image. Clone without history, then run setup from the repository root:
 
 ```bash
+git clone --depth 1 https://github.com/fishaudio/fish-speech.git
+cd fish-speech
 MANAGER_URL=wss://your-manager.example.com/internal/workers/ws \
 WORKER_TOKEN=replace-me \
 bash scripts/autodl_setup.sh
@@ -40,16 +42,18 @@ bash scripts/autodl_setup.sh
 Start the worker after setup:
 
 ```bash
-bash scripts/autodl_start.sh
+bash scripts/autodl_start_worker.sh
 ```
 
-The setup script installs `uv`, creates `.venv`, reuses the AutoDL image's PyTorch `2.8.x` / CUDA `12.8` when available, installs PyTorch `2.8.0+cu128` only when missing or incompatible, installs SGLang, writes `.env`, and downloads `fishaudio/s2-pro` to `/root/autodl-fs/models` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
+The setup script installs `uv`, creates `.venv`, reuses the AutoDL image's PyTorch `2.8.x` / CUDA `12.8` when available, installs PyTorch `2.8.0+cu128` only when missing or incompatible, installs SGLang-Omni, writes `.env`, and downloads `fishaudio/s2-pro` to `/root/autodl-fs/models/s2-pro` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
 
 Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment.
 
-Python dependencies use the Tsinghua PyPI mirror by default: `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`. Override it if needed. PyTorch CUDA wheels still use `PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu128` unless `PYTORCH_INDEX_URL` is set explicitly.
+Python dependencies use the Tsinghua PyPI mirror by default: `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`. PyTorch CUDA wheels use the Aliyun PyTorch wheel mirror by default: `PYTORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
 
-If you copied only the script to a fresh machine, set `REPO_URL` and optionally `REPO_REF` so it can clone the project first.
+Rust setup uses domestic mirrors by default: rustup downloads from `RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static`, and Cargo crates use `CARGO_REGISTRY_URL=sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/`.
+
+If you copied only the root `scripts/autodl_setup.sh` to a fresh machine, set `REPO_URL` and optionally `REPO_REF` so it can clone the project first.
 
 ## Important Environment
 
