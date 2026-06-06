@@ -88,7 +88,7 @@ ensure_rust() {
     return 0
   fi
 
-  local rustup_target rustup_init
+  local rustup_target rustup_tmp_dir rustup_init
   case "$(uname -m)" in
     x86_64|amd64) rustup_target="x86_64-unknown-linux-gnu" ;;
     aarch64|arm64) rustup_target="aarch64-unknown-linux-gnu" ;;
@@ -99,11 +99,12 @@ ensure_rust() {
   esac
 
   log "installing Rust toolchain from ${RUSTUP_INIT_BASE_URL}/${rustup_target}/rustup-init"
-  rustup_init="$(mktemp)"
+  rustup_tmp_dir="$(mktemp -d)"
+  rustup_init="${rustup_tmp_dir}/rustup-init"
   curl --proto '=https' --tlsv1.2 -sSf "${RUSTUP_INIT_BASE_URL}/${rustup_target}/rustup-init" -o "${rustup_init}"
   chmod +x "${rustup_init}"
   "${rustup_init}" -y --profile minimal
-  rm -f "${rustup_init}"
+  rm -rf "${rustup_tmp_dir}"
   # shellcheck disable=SC1091
   source "${HOME}/.cargo/env"
 }
