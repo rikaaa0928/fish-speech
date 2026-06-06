@@ -3,10 +3,10 @@ set -euo pipefail
 
 export PATH="${HOME}/.local/bin:${PATH}"
 
-AUTODL_FS="${AUTODL_FS:-/root/autodl-fs}"
-REPO_DIR="${REPO_DIR:-${AUTODL_FS}/fish-speech}"
+AUTODL_FS="${AUTODL_FS:-/autodl-fs/data}"
+REPO_DIR="${REPO_DIR:-/root/src/fish-speech}"
 REPO_REF="${REPO_REF:-}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://mirrors.aliyun.com/pytorch-wheels/cu128}"
@@ -22,11 +22,17 @@ DOWNLOAD_MODEL="${DOWNLOAD_MODEL:-1}"
 OVERWRITE_ENV="${OVERWRITE_ENV:-0}"
 SGLANG_OMNI_REPO="${SGLANG_OMNI_REPO:-https://github.com/sgl-project/sglang-omni.git}"
 SGLANG_OMNI_REF="${SGLANG_OMNI_REF:-main}"
-SGLANG_OMNI_DIR="${SGLANG_OMNI_DIR:-${AUTODL_FS}/sglang-omni}"
+SGLANG_OMNI_DIR="${SGLANG_OMNI_DIR:-/root/src/sglang-omni}"
+HFD_SCRIPT="${HFD_SCRIPT:-${AUTODL_FS}/hfd.sh}"
+HFD_URL="${HFD_URL:-https://hf-mirror.com/hfd/hfd.sh}"
+HFD_TOOL="${HFD_TOOL:-aria2c}"
+HFD_THREADS="${HFD_THREADS:-8}"
+GIT_RETRY_ATTEMPTS="${GIT_RETRY_ATTEMPTS:-3}"
+GITHUB_ACCELERATION="${GITHUB_ACCELERATION:-auto}"
+NETWORK_TURBO_SCRIPT="${NETWORK_TURBO_SCRIPT:-/etc/network_turbo}"
 
 ENV_MANAGER_URL="${MANAGER_URL-}"
 ENV_WORKER_TOKEN="${WORKER_TOKEN-}"
-ENV_OPENAI_API_KEYS="${OPENAI_API_KEYS-}"
 ENV_MODEL_DIR="${MODEL_DIR-}"
 ENV_CACHE_DIR="${CACHE_DIR-}"
 
@@ -50,6 +56,30 @@ run_root() {
   fi
 }
 
+github_accelerated_git() {
+  if [ "${GITHUB_ACCELERATION}" = "0" ]; then
+    git "$@"
+    return 0
+  fi
+
+  if [ ! -f "${NETWORK_TURBO_SCRIPT}" ]; then
+    if [ "${GITHUB_ACCELERATION}" = "1" ]; then
+      log "warning: ${NETWORK_TURBO_SCRIPT} not found; running git without acceleration"
+    fi
+    git "$@"
+    return 0
+  fi
+
+  log "enabling AutoDL network turbo for git"
+  (
+    set +u
+    # shellcheck disable=SC1090
+    source "${NETWORK_TURBO_SCRIPT}"
+    set -u
+    git "$@"
+  )
+}
+
 install_system_packages() {
   if ! command -v apt-get >/dev/null 2>&1; then
     log "apt-get not found; skip system package installation"
@@ -62,6 +92,7 @@ install_system_packages() {
     build-essential \
     ca-certificates \
     curl \
+    aria2 \
     ffmpeg \
     git \
     git-lfs \
@@ -94,11 +125,11 @@ resolve_repo_root() {
   mkdir -p "$(dirname "${REPO_DIR}")"
   if [ ! -d "${REPO_DIR}/.git" ]; then
     log "cloning ${REPO_URL} to ${REPO_DIR}"
-    git clone "${REPO_URL}" "${REPO_DIR}"
+    github_accelerated_git clone "${REPO_URL}" "${REPO_DIR}"
   fi
   if [ -n "${REPO_REF}" ]; then
     log "checking out ${REPO_REF}"
-    git -C "${REPO_DIR}" fetch origin "${REPO_REF}" || true
+    github_accelerated_git -C "${REPO_DIR}" fetch origin "${REPO_REF}" || true
     git -C "${REPO_DIR}" checkout "${REPO_REF}"
   fi
   cd "${REPO_DIR}" && pwd
@@ -119,6 +150,17 @@ ensure_uv() {
     exit 1
   fi
   export PATH="${HOME}/.local/bin:${PATH}"
+}
+
+select_python_bin() {
+  if [ -n "${PYTHON_BIN}" ]; then
+    return 0
+  fi
+  if [ -x /root/miniconda3/bin/python ]; then
+    PYTHON_BIN=/root/miniconda3/bin/python
+  else
+    PYTHON_BIN=python3
+  fi
 }
 
 ensure_python_bin() {
@@ -147,15 +189,8 @@ PY
 }
 
 load_existing_envs() {
-  local manager_env="${1}/fish-manager/.env"
   local worker_env="${1}/fish-worker/.env"
 
-  if [ -f "${manager_env}" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "${manager_env}"
-    set +a
-  fi
   if [ -f "${worker_env}" ]; then
     set -a
     # shellcheck disable=SC1090
@@ -165,44 +200,8 @@ load_existing_envs() {
 
   if [ -n "${ENV_MANAGER_URL}" ]; then MANAGER_URL="${ENV_MANAGER_URL}"; fi
   if [ -n "${ENV_WORKER_TOKEN}" ]; then WORKER_TOKEN="${ENV_WORKER_TOKEN}"; fi
-  if [ -n "${ENV_OPENAI_API_KEYS}" ]; then OPENAI_API_KEYS="${ENV_OPENAI_API_KEYS}"; fi
   if [ -n "${ENV_MODEL_DIR}" ]; then MODEL_DIR="${ENV_MODEL_DIR}"; fi
   if [ -n "${ENV_CACHE_DIR}" ]; then CACHE_DIR="${ENV_CACHE_DIR}"; fi
-}
-
-write_manager_env() {
-  local repo_root="$1"
-  local env_file="${repo_root}/fish-manager/.env"
-
-  if [ -f "${env_file}" ] && [ "${OVERWRITE_ENV}" != "1" ]; then
-    log "keeping existing ${env_file}"
-    return 0
-  fi
-
-  WORKER_TOKEN="${WORKER_TOKEN:-$(generate_secret)}"
-  OPENAI_API_KEYS="${OPENAI_API_KEYS:-sk-autodl-$(generate_secret)}"
-  MANAGER_BIND_ADDR="${MANAGER_BIND_ADDR:-0.0.0.0:8080}"
-  SQLITE_PATH="${SQLITE_PATH:-${AUTODL_FS}/fish-manager-data/manager.sqlite3}"
-  BLOB_LOCAL_DIR="${BLOB_LOCAL_DIR:-${AUTODL_FS}/fish-manager-data/voices}"
-  MANAGER_RETRY_ON_WORKER_OVERLOAD="${MANAGER_RETRY_ON_WORKER_OVERLOAD:-1}"
-
-  mkdir -p "$(dirname "${SQLITE_PATH}")" "${BLOB_LOCAL_DIR}"
-  umask 077
-  {
-    printf 'MANAGER_BIND_ADDR=%s\n' "${MANAGER_BIND_ADDR}"
-    printf 'OPENAI_API_KEYS=%s\n' "${OPENAI_API_KEYS}"
-    printf 'WORKER_TOKEN=%s\n' "${WORKER_TOKEN}"
-    printf 'SQLITE_PATH=%s\n' "${SQLITE_PATH}"
-    printf 'BLOB_LOCAL_DIR=%s\n' "${BLOB_LOCAL_DIR}"
-    printf 'MANAGER_RETRY_ON_WORKER_OVERLOAD=%s\n' "${MANAGER_RETRY_ON_WORKER_OVERLOAD}"
-  } >"${env_file}"
-  log "wrote ${env_file}"
-}
-
-default_manager_url() {
-  local bind_addr="${MANAGER_BIND_ADDR:-0.0.0.0:8080}"
-  local port="${bind_addr##*:}"
-  printf 'ws://127.0.0.1:%s/internal/workers/ws' "${port}"
 }
 
 write_worker_env() {
@@ -215,19 +214,25 @@ write_worker_env() {
     return 0
   fi
 
-  WORKER_TOKEN="${WORKER_TOKEN:-$(generate_secret)}"
-  MANAGER_URL="${MANAGER_URL:-$(default_manager_url)}"
+  WORKER_TOKEN="${WORKER_TOKEN:-replace-me}"
+  MANAGER_URL="${MANAGER_URL:-wss://manager.example.com/internal/workers/ws}"
   MODEL_ID="${MODEL_ID:-fishaudio/s2-pro}"
-  MODEL_DIR="${MODEL_DIR:-${AUTODL_FS}/models/s2-pro}"
+  MODEL_DIR="${MODEL_DIR:-/autodl-fs/data/models/s2-pro}"
   CACHE_DIR="${CACHE_DIR:-${AUTODL_FS}/cache}"
   HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+  MODEL_REQUIRED_FILES="${MODEL_REQUIRED_FILES:-codec.pth model-00001-of-00002.safetensors model-00002-of-00002.safetensors}"
   SGLANG_HOST="${SGLANG_HOST:-127.0.0.1}"
   SGLANG_PORT="${SGLANG_PORT:-8000}"
   SGLANG_CONFIG="${SGLANG_CONFIG:-${default_config}}"
-  SGLANG_MAX_RUNNING_REQUESTS="${SGLANG_MAX_RUNNING_REQUESTS:-2}"
+  SGLANG_MAX_RUNNING_REQUESTS="${SGLANG_MAX_RUNNING_REQUESTS:-1}"
   SGLANG_MAX_QUEUED_REQUESTS="${SGLANG_MAX_QUEUED_REQUESTS:-0}"
+  SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
+  SGLANG_TTS_MEM_FRACTION_STATIC="${SGLANG_TTS_MEM_FRACTION_STATIC:-0.65}"
+  SGLANG_TTS_MAX_RUNNING_REQUESTS="${SGLANG_TTS_MAX_RUNNING_REQUESTS:-1}"
+  SGLANG_TTS_TORCH_COMPILE="${SGLANG_TTS_TORCH_COMPILE:-0}"
+  SGLANG_TTS_CUDA_GRAPH="${SGLANG_TTS_CUDA_GRAPH:-0}"
   SGLANG_STARTUP_TIMEOUT_SECONDS="${SGLANG_STARTUP_TIMEOUT_SECONDS:-900}"
-  WORKER_MAX_INFLIGHT="${WORKER_MAX_INFLIGHT:-2}"
+  WORKER_MAX_INFLIGHT="${WORKER_MAX_INFLIGHT:-1}"
   WORKER_MAX_QUEUE="${WORKER_MAX_QUEUE:-0}"
   WORKER_MANAGE_SGLANG="${WORKER_MANAGE_SGLANG:-1}"
   HEARTBEAT_INTERVAL_SECONDS="${HEARTBEAT_INTERVAL_SECONDS:-5}"
@@ -239,14 +244,24 @@ write_worker_env() {
     printf 'WORKER_TOKEN=%s\n' "${WORKER_TOKEN}"
     printf 'WORKER_ID=%s\n' "${WORKER_ID:-}"
     printf 'HF_ENDPOINT=%s\n' "${HF_ENDPOINT}"
+    printf 'HFD_SCRIPT=%s\n' "${HFD_SCRIPT}"
+    printf 'HFD_URL=%s\n' "${HFD_URL}"
+    printf 'HFD_TOOL=%s\n' "${HFD_TOOL}"
+    printf 'HFD_THREADS=%s\n' "${HFD_THREADS}"
     printf 'MODEL_ID=%s\n' "${MODEL_ID}"
     printf 'MODEL_DIR=%s\n' "${MODEL_DIR}"
+    printf 'MODEL_REQUIRED_FILES=%q\n' "${MODEL_REQUIRED_FILES}"
     printf 'CACHE_DIR=%s\n' "${CACHE_DIR}"
     printf 'SGLANG_HOST=%s\n' "${SGLANG_HOST}"
     printf 'SGLANG_PORT=%s\n' "${SGLANG_PORT}"
     printf 'SGLANG_CONFIG=%s\n' "${SGLANG_CONFIG}"
     printf 'SGLANG_MAX_RUNNING_REQUESTS=%s\n' "${SGLANG_MAX_RUNNING_REQUESTS}"
     printf 'SGLANG_MAX_QUEUED_REQUESTS=%s\n' "${SGLANG_MAX_QUEUED_REQUESTS}"
+    printf 'SGLANG_EXTRA_ARGS=%q\n' "${SGLANG_EXTRA_ARGS}"
+    printf 'SGLANG_TTS_MEM_FRACTION_STATIC=%s\n' "${SGLANG_TTS_MEM_FRACTION_STATIC}"
+    printf 'SGLANG_TTS_MAX_RUNNING_REQUESTS=%s\n' "${SGLANG_TTS_MAX_RUNNING_REQUESTS}"
+    printf 'SGLANG_TTS_TORCH_COMPILE=%s\n' "${SGLANG_TTS_TORCH_COMPILE}"
+    printf 'SGLANG_TTS_CUDA_GRAPH=%s\n' "${SGLANG_TTS_CUDA_GRAPH}"
     printf 'SGLANG_STARTUP_TIMEOUT_SECONDS=%s\n' "${SGLANG_STARTUP_TIMEOUT_SECONDS}"
     printf 'WORKER_MAX_INFLIGHT=%s\n' "${WORKER_MAX_INFLIGHT}"
     printf 'WORKER_MAX_QUEUE=%s\n' "${WORKER_MAX_QUEUE}"
@@ -260,8 +275,13 @@ setup_worker_venv() {
   local worker_dir="$1"
   log "setting up worker Python environment"
   cd "${worker_dir}"
-  uv venv .venv -p "${PYTHON_BIN}" --system-site-packages
-  UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv sync --no-dev
+  if [ -x .venv/bin/python ]; then
+    log "reusing existing worker venv"
+  else
+    rm -rf .venv
+    uv venv .venv -p "${PYTHON_BIN}" --system-site-packages
+  fi
+  UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv sync --no-dev --inexact
   uv pip install --python "${worker_dir}/.venv/bin/python" --index-url "${PYPI_INDEX_URL}" --upgrade pip setuptools wheel packaging ninja
 }
 
@@ -275,7 +295,8 @@ except Exception:
     raise SystemExit(0)
 
 cuda_version = torch.version.cuda or ""
-ok = torch.__version__.startswith("2.8.") and cuda_version.startswith("12.8") and torch.cuda.is_available()
+major_minor = tuple(int(part) for part in torch.__version__.split("+", 1)[0].split(".")[:2])
+ok = major_minor in {(2, 8), (2, 9)} and cuda_version.startswith("12.8") and torch.cuda.is_available()
 print("ok" if ok else "bad")
 PY
 }
@@ -330,14 +351,27 @@ install_sglang_omni() {
 
   if [ ! -d "${SGLANG_OMNI_DIR}/.git" ]; then
     mkdir -p "$(dirname "${SGLANG_OMNI_DIR}")"
-    log "cloning SGLang-Omni to ${SGLANG_OMNI_DIR}"
-    git clone --depth 1 "${SGLANG_OMNI_REPO}" "${SGLANG_OMNI_DIR}"
+    rm -rf "${SGLANG_OMNI_DIR}"
+    local attempt=1
+    while [ "${attempt}" -le "${GIT_RETRY_ATTEMPTS}" ]; do
+      log "cloning SGLang-Omni to ${SGLANG_OMNI_DIR} (attempt ${attempt}/${GIT_RETRY_ATTEMPTS})"
+      if github_accelerated_git -c http.version=HTTP/1.1 clone --depth 1 --filter=blob:none "${SGLANG_OMNI_REPO}" "${SGLANG_OMNI_DIR}"; then
+        break
+      fi
+      rm -rf "${SGLANG_OMNI_DIR}"
+      attempt=$((attempt + 1))
+      sleep 5
+    done
+    if [ ! -d "${SGLANG_OMNI_DIR}/.git" ]; then
+      printf 'Failed to clone SGLang-Omni after %s attempts.\n' "${GIT_RETRY_ATTEMPTS}" >&2
+      exit 1
+    fi
   fi
 
   log "checking out SGLang-Omni ${SGLANG_OMNI_REF}"
-  git -C "${SGLANG_OMNI_DIR}" fetch --depth 1 origin "${SGLANG_OMNI_REF}" || true
+  github_accelerated_git -C "${SGLANG_OMNI_DIR}" -c http.version=HTTP/1.1 fetch --depth 1 origin "${SGLANG_OMNI_REF}" || true
   git -C "${SGLANG_OMNI_DIR}" checkout "${SGLANG_OMNI_REF}"
-  git -C "${SGLANG_OMNI_DIR}" pull --ff-only || true
+  github_accelerated_git -C "${SGLANG_OMNI_DIR}" -c http.version=HTTP/1.1 pull --ff-only || true
 
   log "installing SGLang-Omni into worker venv"
   UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv pip install --python "${python_bin}" -v -e "${SGLANG_OMNI_DIR}"
@@ -362,6 +396,7 @@ download_model() {
 
 main() {
   install_system_packages
+  select_python_bin
   local repo_root
   repo_root="$(resolve_repo_root)"
   log "repo root: ${repo_root}"
@@ -372,13 +407,11 @@ main() {
   setup_worker_venv "${repo_root}/fish-worker"
   install_torch_if_needed "${repo_root}/fish-worker/.venv/bin/python"
   install_sglang_omni "${repo_root}/fish-worker/.venv/bin/python"
-  write_manager_env "${repo_root}"
   write_worker_env "${repo_root}"
   download_model "${repo_root}/fish-worker"
 
   log "done"
   log "start worker:  bash ${repo_root}/scripts/autodl_start_worker.sh"
-  log "optional local manager test: bash ${repo_root}/scripts/autodl_start_manager.sh"
 }
 
 main "$@"

@@ -14,6 +14,13 @@ RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT:-https://mirrors.ustc.edu.cn/rust-stati
 RUSTUP_INIT_BASE_URL="${RUSTUP_INIT_BASE_URL:-https://mirrors.ustc.edu.cn/rust-static/rustup/dist}"
 CARGO_REGISTRY_URL="${CARGO_REGISTRY_URL:-sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/}"
 
+ENV_MANAGER_BIND_ADDR="${MANAGER_BIND_ADDR-}"
+ENV_OPENAI_API_KEYS="${OPENAI_API_KEYS-}"
+ENV_WORKER_TOKEN="${WORKER_TOKEN-}"
+ENV_SQLITE_PATH="${SQLITE_PATH-}"
+ENV_BLOB_LOCAL_DIR="${BLOB_LOCAL_DIR-}"
+ENV_MANAGER_RETRY_ON_WORKER_OVERLOAD="${MANAGER_RETRY_ON_WORKER_OVERLOAD-}"
+
 log() {
   printf '[autodl-manager] %s\n' "$*" >&2
 }
@@ -156,6 +163,15 @@ load_worker_env() {
   fi
 }
 
+restore_env_overrides() {
+  if [ -n "${ENV_MANAGER_BIND_ADDR}" ]; then MANAGER_BIND_ADDR="${ENV_MANAGER_BIND_ADDR}"; fi
+  if [ -n "${ENV_OPENAI_API_KEYS}" ]; then OPENAI_API_KEYS="${ENV_OPENAI_API_KEYS}"; fi
+  if [ -n "${ENV_WORKER_TOKEN}" ]; then WORKER_TOKEN="${ENV_WORKER_TOKEN}"; fi
+  if [ -n "${ENV_SQLITE_PATH}" ]; then SQLITE_PATH="${ENV_SQLITE_PATH}"; fi
+  if [ -n "${ENV_BLOB_LOCAL_DIR}" ]; then BLOB_LOCAL_DIR="${ENV_BLOB_LOCAL_DIR}"; fi
+  if [ -n "${ENV_MANAGER_RETRY_ON_WORKER_OVERLOAD}" ]; then MANAGER_RETRY_ON_WORKER_OVERLOAD="${ENV_MANAGER_RETRY_ON_WORKER_OVERLOAD}"; fi
+}
+
 ensure_manager_env() {
   local repo_root="$1"
   local env_file="${repo_root}/fish-manager/.env"
@@ -166,6 +182,7 @@ ensure_manager_env() {
   fi
 
   load_worker_env "${repo_root}"
+  restore_env_overrides
 
   WORKER_TOKEN="${WORKER_TOKEN:-$(generate_secret)}"
   OPENAI_API_KEYS="${OPENAI_API_KEYS:-sk-autodl-$(generate_secret)}"

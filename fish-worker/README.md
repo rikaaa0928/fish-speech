@@ -47,13 +47,15 @@ Start the worker after setup:
 bash scripts/autodl_start_worker.sh
 ```
 
-The setup script installs `uv`, creates `.venv`, reuses the AutoDL image's PyTorch `2.8.x` / CUDA `12.8` when available, installs PyTorch `2.8.0+cu128` only when missing or incompatible, installs SGLang-Omni, writes `.env`, and downloads `fishaudio/s2-pro` to `/root/autodl-fs/models/s2-pro` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
+The setup script prepares the worker only. It installs `uv`, creates `.venv`, reuses the AutoDL image's PyTorch CUDA environment when available, installs PyTorch `2.8.0+cu128` only when missing or incompatible, installs SGLang-Omni, writes `fish-worker/.env`, downloads `hfd.sh`, and downloads `fishaudio/s2-pro` with `hfd.sh` to `/autodl-fs/data/models/s2-pro` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
+
+SGLang-Omni can pin a newer CUDA 12.8 PyTorch release than the base AutoDL image. The setup check accepts worker venvs with CUDA-available PyTorch `2.8.x` or `2.9.x`; the tested SGLang-Omni checkout currently installs `torch==2.9.1`.
 
 Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment.
 
 Python dependencies use the Tsinghua PyPI mirror by default: `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`. PyTorch CUDA wheels use the Aliyun PyTorch wheel mirror by default: `PYTORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
 
-`scripts/autodl_setup.sh` prepares the standard worker environment only. Rust is installed by `scripts/autodl_start_manager.sh` when you need to run a local manager for testing.
+`scripts/autodl_setup.sh` prepares the standard worker environment only. It intentionally does not prepare `fish-manager`. Rust is installed by `scripts/autodl_start_manager.sh` only when you need to run a local manager for testing.
 
 If you copied only the root `scripts/autodl_setup.sh` to a fresh machine, set `REPO_URL` and optionally `REPO_REF` so it can clone the project first.
 
@@ -62,10 +64,13 @@ If you copied only the root `scripts/autodl_setup.sh` to a fresh machine, set `R
 - `MANAGER_URL`: manager worker WebSocket endpoint, for example `wss://example.com/internal/workers/ws`.
 - `WORKER_TOKEN`: worker registration token. This is not the public OpenAI API key.
 - `MODEL_ID`: Hugging Face model ID, default `fishaudio/s2-pro`.
-- `MODEL_DIR`: local model directory.
+- `MODEL_DIR`: local model directory, default `/autodl-fs/data/models/s2-pro`.
+- `HFD_SCRIPT`: `hfd.sh` path, default `/autodl-fs/data/hfd.sh`.
+- `HFD_TOOL`: `hfd.sh` downloader, default `aria2c`.
+- `HFD_THREADS`: download connections, default `8`.
 - `SGLANG_MAX_RUNNING_REQUESTS`: SGLang concurrency limit.
 - `SGLANG_MAX_QUEUED_REQUESTS`: SGLang queue limit.
 - `WORKER_MAX_INFLIGHT`: worker-side local inflight limit.
 - `WORKER_MAX_QUEUE`: worker-side local queue allowance.
 
-For realtime behavior, start with `SGLANG_MAX_RUNNING_REQUESTS=2`, `SGLANG_MAX_QUEUED_REQUESTS=0`, `WORKER_MAX_INFLIGHT=2`, and `WORKER_MAX_QUEUE=0`, then tune per GPU.
+For S2-Pro on a 32GB GPU, start with `SGLANG_MAX_RUNNING_REQUESTS=1`, `SGLANG_MAX_QUEUED_REQUESTS=0`, `WORKER_MAX_INFLIGHT=1`, `WORKER_MAX_QUEUE=0`, `SGLANG_TTS_MEM_FRACTION_STATIC=0.65`, `SGLANG_TTS_TORCH_COMPILE=0`, and `SGLANG_TTS_CUDA_GRAPH=0`, then tune per GPU.

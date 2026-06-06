@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import signal
+import shlex
 import subprocess
 import time
 import uuid
@@ -126,13 +127,21 @@ class Worker:
                 self.config.sglang_host,
                 "--port",
                 str(self.config.sglang_port),
-                "--max-running-requests",
-                str(self.config.sglang_max_running_requests),
-                "--max-queued-requests",
-                str(self.config.sglang_max_queued_requests),
             ]
             if self.config.sglang_config:
                 args[4:4] = ["--config", self.config.sglang_config]
+            else:
+                args.extend(
+                    [
+                        "--max-running-requests",
+                        str(self.config.sglang_max_running_requests),
+                        "--max-queued-requests",
+                        str(self.config.sglang_max_queued_requests),
+                    ]
+                )
+            extra_args = os.getenv("SGLANG_EXTRA_ARGS")
+            if extra_args:
+                args.extend(shlex.split(extra_args))
 
         print(f"starting SGLang: {' '.join(args)}", flush=True)
         return await asyncio.create_subprocess_exec(*args)
