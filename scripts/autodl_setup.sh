@@ -357,7 +357,7 @@ download_model() {
   # shellcheck disable=SC1091
   source .env
   set +a
-  ./scripts/ensure_model.sh
+  bash ./scripts/ensure_model.sh
 }
 
 main() {
