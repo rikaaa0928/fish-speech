@@ -17,7 +17,9 @@ cargo run
 Clone without history, then initialize the shared AutoDL test environment from the repository root:
 
 ```bash
-git clone --depth 1 https://github.com/fishaudio/fish-speech.git
+REPO_URL="git@github.com:rikaaa0928/fish-speech.git"
+REPO_REF="rev-agent"
+git clone --depth 1 --branch "${REPO_REF}" "${REPO_URL}" fish-speech
 cd fish-speech
 bash scripts/autodl_setup.sh
 ```

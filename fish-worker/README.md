@@ -32,7 +32,9 @@ Do not run this on a non-GPU machine unless `WORKER_MANAGE_SGLANG=0` and a compa
 Use this on an AutoDL instance created from the PyTorch 2.8 / CUDA 12.8 image. Clone without history, then run setup from the repository root:
 
 ```bash
-git clone --depth 1 https://github.com/fishaudio/fish-speech.git
+REPO_URL="git@github.com:rikaaa0928/fish-speech.git"
+REPO_REF="rev-agent"
+git clone --depth 1 --branch "${REPO_REF}" "${REPO_URL}" fish-speech
 cd fish-speech
 MANAGER_URL=wss://your-manager.example.com/internal/workers/ws \
 WORKER_TOKEN=replace-me \
