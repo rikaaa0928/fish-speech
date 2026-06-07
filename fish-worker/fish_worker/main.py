@@ -28,6 +28,13 @@ def env_int(name: str, default: int) -> int:
     return int(value)
 
 
+def env_optional_int(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
 def env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None or value == "":
@@ -48,6 +55,7 @@ class Config:
     sglang_config: str
     sglang_max_running_requests: int
     sglang_max_queued_requests: int
+    sglang_tts_max_new_tokens: int | None
     worker_max_inflight: int
     worker_max_queue: int
     heartbeat_interval_seconds: float
@@ -74,6 +82,7 @@ class Config:
             sglang_config=os.getenv("SGLANG_CONFIG", "/app/configs/s2pro_tts.yaml"),
             sglang_max_running_requests=env_int("SGLANG_MAX_RUNNING_REQUESTS", 4),
             sglang_max_queued_requests=env_int("SGLANG_MAX_QUEUED_REQUESTS", 2),
+            sglang_tts_max_new_tokens=env_optional_int("SGLANG_TTS_MAX_NEW_TOKENS"),
             worker_max_inflight=env_int("WORKER_MAX_INFLIGHT", 4),
             worker_max_queue=env_int("WORKER_MAX_QUEUE", 2),
             heartbeat_interval_seconds=float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "5")),
@@ -252,6 +261,8 @@ class Worker:
 
         try:
             payload = dict(request.get("payload") or {})
+            if self.config.sglang_tts_max_new_tokens is not None:
+                payload.setdefault("max_new_tokens", self.config.sglang_tts_max_new_tokens)
             refs = []
             for index, ref in enumerate(request.get("references") or []):
                 content_type = ref.get("content_type") or "audio/wav"

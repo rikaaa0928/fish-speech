@@ -23,6 +23,8 @@ OVERWRITE_ENV="${OVERWRITE_ENV:-0}"
 SGLANG_OMNI_REPO="${SGLANG_OMNI_REPO:-https://github.com/sgl-project/sglang-omni.git}"
 SGLANG_OMNI_REF="${SGLANG_OMNI_REF:-main}"
 SGLANG_OMNI_DIR="${SGLANG_OMNI_DIR:-/root/src/sglang-omni}"
+SGLANG_OMNI_UV_OVERRIDES="${SGLANG_OMNI_UV_OVERRIDES:-protobuf>=6.31.1,<7.0.0}"
+SGLANG_OMNI_UV_OVERRIDES_FILE="${SGLANG_OMNI_UV_OVERRIDES_FILE:-}"
 HFD_SCRIPT="${HFD_SCRIPT:-${AUTODL_FS}/hfd.sh}"
 HFD_URL="${HFD_URL:-https://hf-mirror.com/hfd/hfd.sh}"
 HFD_TOOL="${HFD_TOOL:-aria2c}"
@@ -227,8 +229,9 @@ write_worker_env() {
   SGLANG_MAX_RUNNING_REQUESTS="${SGLANG_MAX_RUNNING_REQUESTS:-1}"
   SGLANG_MAX_QUEUED_REQUESTS="${SGLANG_MAX_QUEUED_REQUESTS:-0}"
   SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
-  SGLANG_TTS_MEM_FRACTION_STATIC="${SGLANG_TTS_MEM_FRACTION_STATIC:-0.65}"
+  SGLANG_TTS_MEM_FRACTION_STATIC="${SGLANG_TTS_MEM_FRACTION_STATIC:-0.45}"
   SGLANG_TTS_MAX_RUNNING_REQUESTS="${SGLANG_TTS_MAX_RUNNING_REQUESTS:-1}"
+  SGLANG_TTS_MAX_NEW_TOKENS="${SGLANG_TTS_MAX_NEW_TOKENS:-512}"
   SGLANG_TTS_TORCH_COMPILE="${SGLANG_TTS_TORCH_COMPILE:-0}"
   SGLANG_TTS_CUDA_GRAPH="${SGLANG_TTS_CUDA_GRAPH:-0}"
   SGLANG_STARTUP_TIMEOUT_SECONDS="${SGLANG_STARTUP_TIMEOUT_SECONDS:-900}"
@@ -260,6 +263,7 @@ write_worker_env() {
     printf 'SGLANG_EXTRA_ARGS=%q\n' "${SGLANG_EXTRA_ARGS}"
     printf 'SGLANG_TTS_MEM_FRACTION_STATIC=%s\n' "${SGLANG_TTS_MEM_FRACTION_STATIC}"
     printf 'SGLANG_TTS_MAX_RUNNING_REQUESTS=%s\n' "${SGLANG_TTS_MAX_RUNNING_REQUESTS}"
+    printf 'SGLANG_TTS_MAX_NEW_TOKENS=%s\n' "${SGLANG_TTS_MAX_NEW_TOKENS}"
     printf 'SGLANG_TTS_TORCH_COMPILE=%s\n' "${SGLANG_TTS_TORCH_COMPILE}"
     printf 'SGLANG_TTS_CUDA_GRAPH=%s\n' "${SGLANG_TTS_CUDA_GRAPH}"
     printf 'SGLANG_STARTUP_TIMEOUT_SECONDS=%s\n' "${SGLANG_STARTUP_TIMEOUT_SECONDS}"
@@ -326,6 +330,7 @@ install_torch_if_needed() {
 
 install_sglang_omni() {
   local python_bin="$1"
+  local generated_overrides_file=""
 
   if [ "${INSTALL_SGLANG}" = "0" ]; then
     log "INSTALL_SGLANG=0; skip SGLang installation"
@@ -374,7 +379,19 @@ install_sglang_omni() {
   github_accelerated_git -C "${SGLANG_OMNI_DIR}" -c http.version=HTTP/1.1 pull --ff-only || true
 
   log "installing SGLang-Omni into worker venv"
-  UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv pip install --python "${python_bin}" -v -e "${SGLANG_OMNI_DIR}"
+  local override_args=()
+  if [ -n "${SGLANG_OMNI_UV_OVERRIDES_FILE}" ]; then
+    override_args=(--overrides "${SGLANG_OMNI_UV_OVERRIDES_FILE}")
+  elif [ -n "${SGLANG_OMNI_UV_OVERRIDES}" ]; then
+    generated_overrides_file="$(mktemp)"
+    printf '%s\n' "${SGLANG_OMNI_UV_OVERRIDES}" >"${generated_overrides_file}"
+    override_args=(--overrides "${generated_overrides_file}")
+  fi
+
+  UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv pip install --python "${python_bin}" "${override_args[@]}" -v -e "${SGLANG_OMNI_DIR}"
+  if [ -n "${generated_overrides_file}" ]; then
+    rm -f "${generated_overrides_file}"
+  fi
 }
 
 download_model() {

@@ -26,6 +26,7 @@ ENV_SGLANG_MAX_QUEUED_REQUESTS="${SGLANG_MAX_QUEUED_REQUESTS-}"
 ENV_SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS-}"
 ENV_SGLANG_TTS_MEM_FRACTION_STATIC="${SGLANG_TTS_MEM_FRACTION_STATIC-}"
 ENV_SGLANG_TTS_MAX_RUNNING_REQUESTS="${SGLANG_TTS_MAX_RUNNING_REQUESTS-}"
+ENV_SGLANG_TTS_MAX_NEW_TOKENS="${SGLANG_TTS_MAX_NEW_TOKENS-}"
 ENV_SGLANG_TTS_TORCH_COMPILE="${SGLANG_TTS_TORCH_COMPILE-}"
 ENV_SGLANG_TTS_CUDA_GRAPH="${SGLANG_TTS_CUDA_GRAPH-}"
 ENV_WORKER_MAX_INFLIGHT="${WORKER_MAX_INFLIGHT-}"
@@ -72,26 +73,31 @@ prepare_sglang_config() {
     printf 'model_path: %s\n' "${MODEL_DIR}" >>"${generated_config}"
   fi
 
-  if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ] || [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ] || [ -n "${SGLANG_TTS_TORCH_COMPILE:-}" ] || [ -n "${SGLANG_TTS_CUDA_GRAPH:-}" ]; then
+  if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ] || [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ] || [ -n "${SGLANG_TTS_MAX_NEW_TOKENS:-}" ] || [ -n "${SGLANG_TTS_TORCH_COMPILE:-}" ] || [ -n "${SGLANG_TTS_CUDA_GRAPH:-}" ]; then
     {
       printf 'runtime_overrides:\n'
       printf '  tts_engine:\n'
-      printf '    server_args_overrides:\n'
-      if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ]; then
-        printf '      mem_fraction_static: %s\n' "${SGLANG_TTS_MEM_FRACTION_STATIC}"
+      if [ -n "${SGLANG_TTS_MAX_NEW_TOKENS:-}" ]; then
+        printf '    max_new_tokens: %s\n' "${SGLANG_TTS_MAX_NEW_TOKENS}"
       fi
-      if [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ]; then
-        printf '      max_running_requests: %s\n' "${SGLANG_TTS_MAX_RUNNING_REQUESTS}"
-      fi
-      if [ "${SGLANG_TTS_TORCH_COMPILE:-}" = "0" ]; then
-        printf '      enable_torch_compile: false\n'
-      elif [ "${SGLANG_TTS_TORCH_COMPILE:-}" = "1" ]; then
-        printf '      enable_torch_compile: true\n'
-      fi
-      if [ "${SGLANG_TTS_CUDA_GRAPH:-}" = "0" ]; then
-        printf '      disable_cuda_graph: true\n'
-      elif [ "${SGLANG_TTS_CUDA_GRAPH:-}" = "1" ]; then
-        printf '      disable_cuda_graph: false\n'
+      if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ] || [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ] || [ -n "${SGLANG_TTS_TORCH_COMPILE:-}" ] || [ -n "${SGLANG_TTS_CUDA_GRAPH:-}" ]; then
+        printf '    server_args_overrides:\n'
+        if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ]; then
+          printf '      mem_fraction_static: %s\n' "${SGLANG_TTS_MEM_FRACTION_STATIC}"
+        fi
+        if [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ]; then
+          printf '      max_running_requests: %s\n' "${SGLANG_TTS_MAX_RUNNING_REQUESTS}"
+        fi
+        if [ "${SGLANG_TTS_TORCH_COMPILE:-}" = "0" ]; then
+          printf '      enable_torch_compile: false\n'
+        elif [ "${SGLANG_TTS_TORCH_COMPILE:-}" = "1" ]; then
+          printf '      enable_torch_compile: true\n'
+        fi
+        if [ "${SGLANG_TTS_CUDA_GRAPH:-}" = "0" ]; then
+          printf '      disable_cuda_graph: true\n'
+        elif [ "${SGLANG_TTS_CUDA_GRAPH:-}" = "1" ]; then
+          printf '      disable_cuda_graph: false\n'
+        fi
       fi
     } >>"${generated_config}"
   fi
@@ -112,6 +118,7 @@ restore_env_overrides() {
   if [ -n "${ENV_SGLANG_EXTRA_ARGS}" ]; then export SGLANG_EXTRA_ARGS="${ENV_SGLANG_EXTRA_ARGS}"; fi
   if [ -n "${ENV_SGLANG_TTS_MEM_FRACTION_STATIC}" ]; then export SGLANG_TTS_MEM_FRACTION_STATIC="${ENV_SGLANG_TTS_MEM_FRACTION_STATIC}"; fi
   if [ -n "${ENV_SGLANG_TTS_MAX_RUNNING_REQUESTS}" ]; then export SGLANG_TTS_MAX_RUNNING_REQUESTS="${ENV_SGLANG_TTS_MAX_RUNNING_REQUESTS}"; fi
+  if [ -n "${ENV_SGLANG_TTS_MAX_NEW_TOKENS}" ]; then export SGLANG_TTS_MAX_NEW_TOKENS="${ENV_SGLANG_TTS_MAX_NEW_TOKENS}"; fi
   if [ -n "${ENV_SGLANG_TTS_TORCH_COMPILE}" ]; then export SGLANG_TTS_TORCH_COMPILE="${ENV_SGLANG_TTS_TORCH_COMPILE}"; fi
   if [ -n "${ENV_SGLANG_TTS_CUDA_GRAPH}" ]; then export SGLANG_TTS_CUDA_GRAPH="${ENV_SGLANG_TTS_CUDA_GRAPH}"; fi
   if [ -n "${ENV_WORKER_MAX_INFLIGHT}" ]; then export WORKER_MAX_INFLIGHT="${ENV_WORKER_MAX_INFLIGHT}"; fi
