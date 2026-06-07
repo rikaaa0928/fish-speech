@@ -12,7 +12,9 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The container downloads `fishaudio/s2-pro` into `./models` if the model directory is empty, starts SGLang-Omni, waits for health, and connects to the manager.
+By default, Docker Compose mounts `./models:/models` and `./cache:/cache`. Override `HOST_MODEL_DIR`, `HOST_CACHE_DIR`, `CONTAINER_MODEL_DIR`, `CONTAINER_CACHE_DIR`, `MODEL_DIR`, and `CACHE_DIR` in `.env` if your 4090 host uses different storage paths. The container downloads `fishaudio/s2-pro` to `MODEL_DIR` if the model directory is incomplete, generates a S2-Pro config from `configs/s2pro_tts.yaml` with the same conservative 4090D runtime defaults as bare-metal setup, starts SGLang-Omni, waits for health, and connects to the manager.
+
+The Docker default is tuned for 24GB GPUs: `SGLANG_TTS_MEM_FRACTION_STATIC=0.45`, `SGLANG_TTS_MAX_NEW_TOKENS=512`, single inflight request, no worker queue, torch compile off, and CUDA graph off. On 32GB GPUs, raise the settings using the tuning guide below.
 
 ## Run With uv
 
@@ -67,9 +69,11 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 
 - `MANAGER_URL`: manager worker WebSocket endpoint, for example `wss://example.com/internal/workers/ws`.
 - `WORKER_TOKEN`: worker registration token. This is not the public OpenAI API key.
+- `HOST_MODEL_DIR` and `HOST_CACHE_DIR`: Docker host bind-mount paths, defaults `./models` and `./cache`.
+- `CONTAINER_MODEL_DIR` and `CONTAINER_CACHE_DIR`: Docker container mount targets, defaults `/models` and `/cache`.
 - `MODEL_ID`: Hugging Face model ID, default `fishaudio/s2-pro`.
-- `MODEL_DIR`: local model directory, default `/autodl-fs/data/models/s2-pro`.
-- `HFD_SCRIPT`: `hfd.sh` path, default `/autodl-fs/data/hfd.sh`.
+- `MODEL_DIR`: local model directory, Docker default `/models/s2-pro`; AutoDL setup writes `/autodl-fs/data/models/s2-pro`.
+- `HFD_SCRIPT`: `hfd.sh` path, Docker default `/cache/hfd.sh`; AutoDL setup writes `/autodl-fs/data/hfd.sh`.
 - `HFD_TOOL`: `hfd.sh` downloader, default `aria2c`.
 - `HFD_THREADS`: download connections, default `8`.
 - `SGLANG_MAX_RUNNING_REQUESTS`: SGLang concurrency limit.

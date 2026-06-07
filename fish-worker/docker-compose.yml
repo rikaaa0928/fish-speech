@@ -8,5 +8,5 @@ services:
     env_file:
       - .env
     volumes:
-      - ./models:/models
-      - ./cache:/cache
+      - ${HOST_MODEL_DIR:-./models}:${CONTAINER_MODEL_DIR:-/models}
+      - ${HOST_CACHE_DIR:-./cache}:${CONTAINER_CACHE_DIR:-/cache}

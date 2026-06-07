@@ -79,7 +79,7 @@ class Config:
             cache_dir=Path(os.getenv("CACHE_DIR", "/cache")),
             sglang_host=os.getenv("SGLANG_HOST", "127.0.0.1"),
             sglang_port=env_int("SGLANG_PORT", 8000),
-            sglang_config=os.getenv("SGLANG_CONFIG", "/app/configs/s2pro_tts.yaml"),
+            sglang_config=os.getenv("SGLANG_CONFIG", "configs/s2pro_tts.yaml"),
             sglang_max_running_requests=env_int("SGLANG_MAX_RUNNING_REQUESTS", 4),
             sglang_max_queued_requests=env_int("SGLANG_MAX_QUEUED_REQUESTS", 2),
             sglang_tts_max_new_tokens=env_optional_int("SGLANG_TTS_MAX_NEW_TOKENS"),
