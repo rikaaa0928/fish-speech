@@ -56,8 +56,6 @@ class Config:
     sglang_max_running_requests: int
     sglang_max_queued_requests: int
     sglang_tts_max_new_tokens: int | None
-    worker_max_inflight: int
-    worker_max_queue: int
     heartbeat_interval_seconds: float
     manage_sglang: bool
 
@@ -83,8 +81,6 @@ class Config:
             sglang_max_running_requests=env_int("SGLANG_MAX_RUNNING_REQUESTS", 4),
             sglang_max_queued_requests=env_int("SGLANG_MAX_QUEUED_REQUESTS", 2),
             sglang_tts_max_new_tokens=env_optional_int("SGLANG_TTS_MAX_NEW_TOKENS"),
-            worker_max_inflight=env_int("WORKER_MAX_INFLIGHT", 4),
-            worker_max_queue=env_int("WORKER_MAX_QUEUE", 2),
             heartbeat_interval_seconds=float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "5")),
             manage_sglang=env_bool("WORKER_MANAGE_SGLANG", True),
         )
@@ -94,8 +90,6 @@ class Worker:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.local_inflight = 0
-        self.local_queue = 0
-        self.local_reject_count = 0
         self.sglang_reject_count = 0
         self.ewma_latency_ms: float | None = None
         self.last_error: str | None = None
@@ -178,16 +172,6 @@ class Worker:
                     message = unpack_msg(raw)
                     if message.get("type") == "inference_request":
                         data = message["data"]
-                        if self.is_overloaded():
-                            self.local_reject_count += 1
-                            await send_error(
-                                ws,
-                                data["request_id"],
-                                "overloaded",
-                                "Worker is overloaded",
-                                retryable=True,
-                            )
-                            continue
                         asyncio.create_task(self.handle_inference(ws, data))
                     elif message.get("type") == "cancel_request":
                         print(f"cancel requested: {message.get('data')}", flush=True)
@@ -208,8 +192,8 @@ class Worker:
             "vram_total_mb": gpu.get("vram_total_mb"),
             "max_running_requests": self.config.sglang_max_running_requests,
             "max_queued_requests": self.config.sglang_max_queued_requests,
-            "worker_max_inflight": self.config.worker_max_inflight,
-            "worker_max_queue": self.config.worker_max_queue,
+            "worker_max_inflight": self.config.sglang_max_running_requests,
+            "worker_max_queue": self.config.sglang_max_queued_requests,
             "sglang_url": self.config.sglang_url,
             "started_at": self.started_at.isoformat().replace("+00:00", "Z"),
         }
@@ -223,10 +207,10 @@ class Worker:
                 "heartbeat",
                 {
                     "worker_id": self.config.worker_id,
-                    "ready": healthy and not self.is_overloaded(),
+                    "ready": healthy,
                     "sglang_healthy": healthy,
                     "inflight": self.local_inflight,
-                    "queued": self.local_queue,
+                    "queued": 0,
                     "max_running_requests": self.config.sglang_max_running_requests,
                     "max_queued_requests": self.config.sglang_max_queued_requests,
                     "vram_used_mb": gpu.get("vram_used_mb"),
@@ -237,10 +221,6 @@ class Worker:
                 },
             )
             await asyncio.sleep(self.config.heartbeat_interval_seconds)
-
-    def is_overloaded(self) -> bool:
-        capacity = self.config.worker_max_inflight + self.config.worker_max_queue
-        return capacity <= 0 or self.local_inflight + self.local_queue >= capacity
 
     async def sglang_healthy(self) -> bool:
         async with aiohttp.ClientSession() as session:

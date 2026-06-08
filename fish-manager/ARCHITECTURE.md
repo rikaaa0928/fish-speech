@@ -395,18 +395,13 @@ Content-Type: application/json
 
 For realtime mode, `MANAGER_QUEUE_TIMEOUT_MS` defaults to `0`, meaning the manager does not hold a cross-worker queue.
 
-### Worker Local Guard
+### Worker Forwarding
 
-The worker performs another check when it receives a request because heartbeat data can be stale.
+The worker does not keep a separate local admission queue. It forwards accepted manager requests to SGLang and maps SGLang `429` responses to `InferenceError(code="overloaded", retryable=true)`.
 
-```text
-if local_inflight + local_queue >= WORKER_MAX_INFLIGHT + WORKER_MAX_QUEUE:
-    return InferenceError(code="overloaded", retryable=true)
-```
+Manager behavior on retryable worker overload:
 
-Manager behavior on worker overload:
-
-- If response has not started, retry another eligible worker once.
+- If response has not started, retry remaining eligible workers.
 - If no eligible worker exists, return `429`.
 - If streaming output already started, do not retry on another worker.
 
@@ -561,8 +556,6 @@ MODEL_DIR=/models/s2-pro
 SGLANG_PORT=8000
 SGLANG_MAX_RUNNING_REQUESTS=4
 SGLANG_MAX_QUEUED_REQUESTS=2
-WORKER_MAX_INFLIGHT=4
-WORKER_MAX_QUEUE=2
 ```
 
 ## Docker Strategy
@@ -595,8 +588,6 @@ services:
       MODEL_DIR: "/models/s2-pro"
       SGLANG_MAX_RUNNING_REQUESTS: "4"
       SGLANG_MAX_QUEUED_REQUESTS: "2"
-      WORKER_MAX_INFLIGHT: "4"
-      WORKER_MAX_QUEUE: "2"
     volumes:
       - ./models:/models
       - ./cache:/cache

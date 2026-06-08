@@ -291,7 +291,7 @@ async fn non_streaming_inference(
             references.clone(),
             false,
             api_kind.clone(),
-            &exclude,
+            &mut exclude,
         )
         .await?;
 
@@ -323,6 +323,11 @@ async fn non_streaming_inference(
             continue;
         }
 
+        if audio.is_empty() {
+            exclude.insert(worker_id);
+            continue;
+        }
+
         return Err(AppError::Upstream(
             "worker disconnected before response completed".to_string(),
         ));
@@ -335,28 +340,62 @@ async fn stream_inference(
     references: Vec<InternalReference>,
     api_kind: String,
 ) -> AppResult<Response> {
-    let exclude = HashSet::new();
-    let (_worker_id, mut rx) =
-        dispatch_once(&state, payload, references, true, api_kind, &exclude).await?;
+    let mut exclude = HashSet::new();
 
-    let body_stream = stream! {
-        while let Some(event) = rx.recv().await {
-            match event {
-                WorkerEvent::Chunk(chunk) => yield Ok::<Bytes, std::io::Error>(Bytes::from(chunk.bytes)),
-                WorkerEvent::Done => break,
-                WorkerEvent::Error(error) => {
-                    yield Err(std::io::Error::new(std::io::ErrorKind::Other, error.message));
-                    break;
+    loop {
+        let (worker_id, mut rx) = dispatch_once(
+            &state,
+            payload.clone(),
+            references.clone(),
+            true,
+            api_kind.clone(),
+            &mut exclude,
+        )
+        .await?;
+
+        match rx.recv().await {
+            Some(WorkerEvent::Chunk(first_chunk)) => {
+                let content_type = first_chunk.content_type;
+                let first_bytes = first_chunk.bytes;
+                let body_stream = stream! {
+                    yield Ok::<Bytes, std::io::Error>(Bytes::from(first_bytes));
+                    while let Some(event) = rx.recv().await {
+                        match event {
+                            WorkerEvent::Chunk(chunk) => yield Ok::<Bytes, std::io::Error>(Bytes::from(chunk.bytes)),
+                            WorkerEvent::Done => break,
+                            WorkerEvent::Error(error) => {
+                                yield Err(std::io::Error::new(std::io::ErrorKind::Other, error.message));
+                                break;
+                            }
+                        }
+                    }
+                };
+
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .body(Body::from_stream(body_stream))
+                    .map_err(|error| AppError::Internal(anyhow::Error::from(error)));
+            }
+            Some(WorkerEvent::Done) => {
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from(Bytes::new()))
+                    .map_err(|error| AppError::Internal(anyhow::Error::from(error)));
+            }
+            Some(WorkerEvent::Error(error)) => {
+                if should_retry(&state, &error, true) {
+                    exclude.insert(worker_id);
+                    continue;
                 }
+                return Err(error_to_app_error(error));
+            }
+            None => {
+                exclude.insert(worker_id);
             }
         }
-    };
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/octet-stream")
-        .body(Body::from_stream(body_stream))
-        .map_err(|error| AppError::Internal(anyhow::Error::from(error)))
+    }
 }
 
 async fn dispatch_once(
@@ -365,39 +404,40 @@ async fn dispatch_once(
     references: Vec<InternalReference>,
     stream: bool,
     api_kind: String,
-    exclude: &HashSet<String>,
+    exclude: &mut HashSet<String>,
 ) -> AppResult<(String, mpsc::Receiver<WorkerEvent>)> {
-    let worker = state.select_worker(exclude).await?;
-    let request_id = format!("req_{}", Uuid::new_v4().simple());
-    let (tx, rx) = mpsc::channel(128);
+    loop {
+        let worker = state.select_worker(exclude).await?;
+        let request_id = format!("req_{}", Uuid::new_v4().simple());
+        let (tx, rx) = mpsc::channel(128);
 
-    state.pending.insert(
-        request_id.clone(),
-        PendingRequest {
-            worker_id: worker.worker_id.clone(),
-            tx,
-        },
-    );
-    worker.manager_inflight.fetch_add(1, Ordering::Relaxed);
+        state.pending.insert(
+            request_id.clone(),
+            PendingRequest {
+                worker_id: worker.worker_id.clone(),
+                tx,
+            },
+        );
+        worker.manager_inflight.fetch_add(1, Ordering::Relaxed);
 
-    let message = WireMessage::InferenceRequest(InferenceRequest {
-        request_id: request_id.clone(),
-        api_kind,
-        payload,
-        references,
-        stream,
-        deadline_ms: None,
-    });
+        let message = WireMessage::InferenceRequest(InferenceRequest {
+            request_id: request_id.clone(),
+            api_kind: api_kind.clone(),
+            payload: payload.clone(),
+            references: references.clone(),
+            stream,
+            deadline_ms: None,
+        });
 
-    if worker.tx.send(message).await.is_err() {
-        state.pending.remove(&request_id);
-        worker.manager_inflight.fetch_sub(1, Ordering::Relaxed);
-        return Err(AppError::Upstream(
-            "selected worker is disconnected".to_string(),
-        ));
+        if worker.tx.send(message).await.is_err() {
+            state.pending.remove(&request_id);
+            worker.manager_inflight.fetch_sub(1, Ordering::Relaxed);
+            exclude.insert(worker.worker_id);
+            continue;
+        }
+
+        return Ok((worker.worker_id, rx));
     }
-
-    Ok((worker.worker_id, rx))
 }
 
 fn should_retry(state: &AppState, error: &InferenceError, no_bytes_sent: bool) -> bool {

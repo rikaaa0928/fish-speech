@@ -14,7 +14,7 @@ docker compose up --build
 
 By default, Docker Compose mounts `./models:/models` and `./cache:/cache`. Override `HOST_MODEL_DIR`, `HOST_CACHE_DIR`, `CONTAINER_MODEL_DIR`, `CONTAINER_CACHE_DIR`, `MODEL_DIR`, and `CACHE_DIR` in `.env` if your 4090 host uses different storage paths. The container downloads `fishaudio/s2-pro` to `MODEL_DIR` if the model directory is incomplete, generates a S2-Pro config from `configs/s2pro_tts.yaml` with the same conservative 4090D runtime defaults as bare-metal setup, starts SGLang-Omni, waits for health, and connects to the manager.
 
-The Docker default is tuned for 24GB GPUs: `SGLANG_TTS_MEM_FRACTION_STATIC=0.45`, `SGLANG_TTS_MAX_NEW_TOKENS=512`, single inflight request, no worker queue, torch compile off, and CUDA graph off. On 32GB GPUs, raise the settings using the tuning guide below.
+The Docker default is tuned for 24GB GPUs: `SGLANG_TTS_MEM_FRACTION_STATIC=0.45`, `SGLANG_TTS_MAX_NEW_TOKENS=512`, single SGLang TTS inflight request, no SGLang queue, torch compile off, and CUDA graph off. On 32GB GPUs, raise the settings using the tuning guide below.
 
 ## Run With uv
 
@@ -79,7 +79,6 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 - `SGLANG_MAX_RUNNING_REQUESTS`: SGLang concurrency limit.
 - `SGLANG_MAX_QUEUED_REQUESTS`: SGLang queue limit.
 - `SGLANG_TTS_MAX_NEW_TOKENS`: S2-Pro TTS engine output-token limit, default `512`.
-- `WORKER_MAX_INFLIGHT`: worker-side local inflight limit.
-- `WORKER_MAX_QUEUE`: worker-side local queue allowance.
+- The worker does not keep a separate local admission queue; SGLang is the final overload guard and manager retries another worker on retryable overloads.
 
-The default S2-Pro settings are conservative for 24GB GPUs. On 32GB GPUs, try `SGLANG_MAX_RUNNING_REQUESTS=1`, `SGLANG_MAX_QUEUED_REQUESTS=0`, `WORKER_MAX_INFLIGHT=1`, `WORKER_MAX_QUEUE=0`, `SGLANG_TTS_MEM_FRACTION_STATIC=0.65`, `SGLANG_TTS_MAX_NEW_TOKENS=1024`, `SGLANG_TTS_TORCH_COMPILE=0`, and `SGLANG_TTS_CUDA_GRAPH=0`, then tune per GPU.
+The default S2-Pro settings are conservative for 24GB GPUs. On 32GB GPUs, try `SGLANG_MAX_RUNNING_REQUESTS=1`, `SGLANG_MAX_QUEUED_REQUESTS=0`, `SGLANG_TTS_MEM_FRACTION_STATIC=0.65`, `SGLANG_TTS_MAX_NEW_TOKENS=1024`, `SGLANG_TTS_TORCH_COMPILE=0`, and `SGLANG_TTS_CUDA_GRAPH=0`, then tune per GPU.

@@ -12,8 +12,6 @@ SGLANG_TTS_MAX_RUNNING_REQUESTS=1
 SGLANG_TTS_MAX_NEW_TOKENS=512
 SGLANG_TTS_TORCH_COMPILE=0
 SGLANG_TTS_CUDA_GRAPH=0
-WORKER_MAX_INFLIGHT=1
-WORKER_MAX_QUEUE=0
 ```
 
 Result:
@@ -35,8 +33,6 @@ SGLANG_TTS_MAX_RUNNING_REQUESTS=1
 SGLANG_TTS_MAX_NEW_TOKENS=1024
 SGLANG_TTS_TORCH_COMPILE=0
 SGLANG_TTS_CUDA_GRAPH=0
-WORKER_MAX_INFLIGHT=1
-WORKER_MAX_QUEUE=0
 ```
 
 Result:
@@ -62,10 +58,6 @@ Controls the S2-Pro TTS engine's internal SGLang concurrency. Keep this at `1` u
 `SGLANG_MAX_RUNNING_REQUESTS` and `SGLANG_MAX_QUEUED_REQUESTS`
 
 These are the worker-advertised SGLang limits and are used when starting without a SGLang config. With the S2-Pro config path, the TTS-specific `SGLANG_TTS_MAX_RUNNING_REQUESTS` is the important engine override. Keep the advertised values aligned with the real TTS engine limit so the manager does not overroute traffic.
-
-`WORKER_MAX_INFLIGHT` and `WORKER_MAX_QUEUE`
-
-These are worker-side backpressure limits. `WORKER_MAX_INFLIGHT=1` and `WORKER_MAX_QUEUE=0` is safest for paid GPU instances because overload fails fast instead of building a slow queue. Raise `WORKER_MAX_QUEUE` only if the manager/client can tolerate waiting.
 
 `SGLANG_TTS_TORCH_COMPILE`
 
@@ -115,8 +107,6 @@ SGLANG_TTS_MAX_RUNNING_REQUESTS=1 \
 SGLANG_TTS_MAX_NEW_TOKENS=512 \
 SGLANG_TTS_TORCH_COMPILE=0 \
 SGLANG_TTS_CUDA_GRAPH=0 \
-WORKER_MAX_INFLIGHT=1 \
-WORKER_MAX_QUEUE=0 \
 bash scripts/autodl_start_worker.sh
 ```
 
@@ -134,11 +124,9 @@ More throughput/concurrency:
 ```bash
 SGLANG_TTS_MAX_RUNNING_REQUESTS=2
 SGLANG_MAX_RUNNING_REQUESTS=2
-WORKER_MAX_INFLIGHT=2
-WORKER_MAX_QUEUE=0
 ```
 
-Raise concurrency gradually: `1 -> 2 -> 4`. Do not raise worker concurrency above the TTS engine concurrency. If requests become much slower, GPU utilization is low, or OOM occurs, go back down.
+Raise concurrency gradually: `1 -> 2 -> 4`. Keep the advertised SGLang concurrency aligned with the TTS engine concurrency. If requests become much slower, GPU utilization is low, or OOM occurs, go back down.
 
 Longer generation:
 

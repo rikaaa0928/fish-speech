@@ -1,0 +1,11 @@
+services:
+  fish-manager:
+    image: ${FISH_MANAGER_IMAGE:?FISH_MANAGER_IMAGE is required}
+    pull_policy: always
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "9284:8080"
+    volumes:
+      - ./fish-manager-data:/app/fish-manager-data

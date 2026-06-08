@@ -53,13 +53,6 @@ impl AppState {
             let manager_inflight = worker.manager_inflight.load(Ordering::Relaxed);
             let effective_inflight = manager_inflight.max(status.inflight);
             let pressure = effective_inflight.saturating_add(status.queued);
-            let capacity = status
-                .worker_max_inflight
-                .saturating_add(status.worker_max_queue);
-
-            if capacity == 0 || pressure >= capacity {
-                continue;
-            }
 
             match &best {
                 Some((best_pressure, _)) if pressure >= *best_pressure => {}
@@ -68,7 +61,9 @@ impl AppState {
         }
 
         best.map(|(_, worker)| worker).ok_or_else(|| {
-            AppError::TooManyRequests("All workers are busy. Please retry later.".to_string())
+            AppError::TooManyRequests(
+                "All workers are overloaded or unavailable. Please retry later.".to_string(),
+            )
         })
     }
 }
