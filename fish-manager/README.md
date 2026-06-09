@@ -78,6 +78,61 @@ ws://127.0.0.1:8080/internal/workers/ws
 - `GET /v1/voices/{voice_id}`
 - `DELETE /v1/voices/{voice_id}`
 
+## API Availability Check
+
+Use the uv script to check whether manager APIs are reachable:
+
+```bash
+uv run --script scripts/check_apis.py
+```
+
+The script reads `.env` by default and uses `OPENAI_API_KEY`, or the first value from `OPENAI_API_KEYS`. You can also pass values explicitly:
+
+```bash
+uv run --script scripts/check_apis.py \
+  --base-url http://127.0.0.1:8080 \
+  --api-key sk-live-1 \
+  --worker-token replace-me
+```
+
+Run only one or several checks with `--only`. The option can be repeated or comma-separated:
+
+```bash
+uv run --script scripts/check_apis.py --only health
+uv run --script scripts/check_apis.py --only health --only workers
+uv run --script scripts/check_apis.py --only health,workers,tts
+```
+
+Common `--only` values:
+
+- `health`
+- `workers`
+- `voices`
+- `voices-list`
+- `voices-create`
+- `voices-get`
+- `voices-delete`
+- `speech`
+- `audio-speech`
+- `tts`
+- `worker-ws`
+- `public`
+- `all`
+
+Endpoint-style aliases are also supported, for example:
+
+```bash
+uv run --script scripts/check_apis.py --only "POST /v1/tts"
+```
+
+By default, TTS checks treat `HTTP 429` as a warning because it means the API is reachable but no healthy worker is available. To require a real worker audio response, add `--require-worker`:
+
+```bash
+uv run --script scripts/check_apis.py --only speech --require-worker
+```
+
+The script prints response bodies for non-binary responses. Successful `/v1/audio/speech` and `/v1/tts` binary audio responses print only the content type and byte count.
+
 ## Create Voice
 
 ```bash
