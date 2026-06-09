@@ -304,6 +304,12 @@ PY
 install_torch_if_needed() {
   local python_bin="$1"
   local status
+
+  if [ "${INSTALL_TORCH}" = "skip" ]; then
+    log "INSTALL_TORCH=skip; skip PyTorch installation and CUDA validation"
+    return 0
+  fi
+
   status="$(torch_status "${python_bin}")"
 
   if [ "${INSTALL_TORCH}" = "0" ]; then

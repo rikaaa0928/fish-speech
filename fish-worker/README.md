@@ -55,7 +55,7 @@ SGLang-Omni can pin a newer CUDA 12.8 PyTorch release than the base AutoDL image
 
 The tested 4090D base image had no `python3` on `PATH`; `scripts/autodl_setup.sh` selects `/root/miniconda3/bin/python` automatically when present. It also applies a default uv override, `SGLANG_OMNI_UV_OVERRIDES=protobuf>=6.31.1,<7.0.0`, for the current SGLang-Omni dependency resolver conflict.
 
-Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment.
+Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment. Set `INSTALL_TORCH=skip` to skip both PyTorch installation and CUDA validation, for example when preparing non-GPU dependencies on a machine without a GPU; use `INSTALL_SGLANG=0` with it if you also need to avoid SGLang-Omni pulling PyTorch as a dependency.
 
 Python dependencies use the Tsinghua PyPI mirror by default: `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`. PyTorch CUDA wheels use the Aliyun PyTorch wheel mirror by default: `PYTORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
 
