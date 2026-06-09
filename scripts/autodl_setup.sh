@@ -79,6 +79,8 @@ github_accelerated_git() {
     source "${NETWORK_TURBO_SCRIPT}"
     set -u
     git "$@"
+    unset http_proxy
+    unset https_proxy
   )
 }
 
