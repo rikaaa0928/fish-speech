@@ -48,6 +48,12 @@ async fn handle_worker_socket(state: AppState, mut socket: WebSocket) {
     };
 
     let worker_id = hello.worker_id.clone();
+    let version = hello.version.clone();
+    let model_id = hello.model_id.clone();
+    let model_revision = hello.model_revision.clone();
+    let gpu_name = hello.gpu_name.clone();
+    let gpu_count = hello.gpu_count;
+    let sglang_url = hello.sglang_url.clone();
     let (tx, mut rx) = mpsc::channel::<WireMessage>(128);
     let manager_inflight = Arc::new(AtomicU32::new(0));
     let status = Arc::new(RwLock::new(status_from_hello(hello)));
@@ -60,7 +66,16 @@ async fn handle_worker_socket(state: AppState, mut socket: WebSocket) {
 
     // TODO(ha): add manager instance ID and worker sticky registration.
     state.workers.insert(worker_id.clone(), handle.clone());
-    tracing::info!(worker_id, "worker connected");
+    tracing::info!(
+        worker_id,
+        version,
+        model_id,
+        model_revision,
+        gpu_name,
+        gpu_count,
+        sglang_url,
+        "worker connected"
+    );
 
     let (mut sender, mut receiver) = socket.split();
     let writer_worker_id = worker_id.clone();
@@ -138,28 +153,42 @@ async fn process_worker_message(state: &AppState, handle: &WorkerHandle, message
             status.manager_inflight = handle.manager_inflight.load(Ordering::Relaxed);
         }
         WireMessage::InferenceChunk(chunk) => {
-            let tx = state
-                .pending
-                .get(&chunk.request_id)
-                .map(|entry| entry.tx.clone());
+            let request_id = chunk.request_id.clone();
+            let tx = state.pending.get(&request_id).map(|entry| entry.tx.clone());
             if let Some(tx) = tx {
                 let _ = tx.send(WorkerEvent::Chunk(chunk)).await;
+            } else {
+                tracing::warn!(worker_id = %handle.worker_id, request_id = %request_id, "received chunk for unknown request");
             }
         }
         WireMessage::InferenceDone(done) => {
-            if let Some((_, pending)) = state.pending.remove(&done.request_id) {
+            let request_id = done.request_id;
+            if let Some((_, pending)) = state.pending.remove(&request_id) {
                 let _ = pending.tx.send(WorkerEvent::Done).await;
                 if pending.worker_id == handle.worker_id {
                     handle.manager_inflight.fetch_sub(1, Ordering::Relaxed);
                 }
+            } else {
+                tracing::warn!(worker_id = %handle.worker_id, request_id = %request_id, "received done for unknown request");
             }
         }
         WireMessage::InferenceError(error) => {
-            if let Some((_, pending)) = state.pending.remove(&error.request_id) {
+            let request_id = error.request_id.clone();
+            tracing::warn!(
+                worker_id = %handle.worker_id,
+                request_id = %request_id,
+                code = %error.code,
+                retryable = error.retryable,
+                message = %error.message,
+                "received worker inference error"
+            );
+            if let Some((_, pending)) = state.pending.remove(&request_id) {
                 let _ = pending.tx.send(WorkerEvent::Error(error)).await;
                 if pending.worker_id == handle.worker_id {
                     handle.manager_inflight.fetch_sub(1, Ordering::Relaxed);
                 }
+            } else {
+                tracing::warn!(worker_id = %handle.worker_id, request_id = %request_id, "received error for unknown request");
             }
         }
         WireMessage::WorkerHello(_)

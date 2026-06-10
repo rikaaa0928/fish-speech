@@ -139,6 +139,7 @@ async fn get_internal_voice_audio(
     Query(query): Query<InternalVoiceAudioQuery>,
 ) -> AppResult<Response> {
     require_worker_auth(&headers, &state.config)?;
+    tracing::info!(voice_id = %voice_id, checksum = ?query.checksum, "worker requested voice audio");
     let voice = state
         .voice_store
         .get_voice(&voice_id)
@@ -150,15 +151,28 @@ async fn get_internal_voice_audio(
         .as_deref()
         .is_some_and(|checksum| checksum != voice.checksum)
     {
+        tracing::warn!(
+            voice_id = %voice_id,
+            requested_checksum = ?query.checksum,
+            current_checksum = %voice.checksum,
+            "worker requested stale or unknown voice checksum"
+        );
         return Err(AppError::NotFound("voice checksum not found".to_string()));
     }
 
     let audio = state.voice_store.get_voice_audio(&voice).await?;
+    let size_bytes = audio.len();
     let mut response = binary_response(StatusCode::OK, voice.content_type, audio)?;
     response.headers_mut().insert(
         "x-voice-checksum",
         HeaderValue::from_str(&voice.checksum)
             .map_err(|error| AppError::Internal(anyhow::Error::from(error)))?,
+    );
+    tracing::info!(
+        voice_id = %voice_id,
+        checksum = %voice.checksum,
+        size_bytes,
+        "served voice audio to worker"
     );
     Ok(response)
 }
@@ -248,6 +262,17 @@ async fn handle_speech(
 
     let stream_response = request.stream.unwrap_or(false);
     let references = resolve_references(&state, &request).await?;
+    let reference_summary = reference_summary(&references);
+    tracing::info!(
+        api_kind,
+        stream = stream_response,
+        input_chars = request.input.chars().count(),
+        references = reference_summary.total,
+        metadata_references = reference_summary.metadata,
+        inline_references = reference_summary.inline,
+        inline_audio_bytes = reference_summary.inline_audio_bytes,
+        "accepted speech request"
+    );
     let payload = normalized_payload(&request)?;
 
     if stream_response {
@@ -269,6 +294,13 @@ async fn resolve_references(
             .get_voice(voice_id)
             .await?
             .ok_or_else(|| AppError::NotFound("voice not found".to_string()))?;
+        tracing::info!(
+            voice_id = %voice.voice_id,
+            checksum = %voice.checksum,
+            content_type = %voice.content_type,
+            size_bytes = voice.size_bytes,
+            "resolved stored voice reference"
+        );
         references.push(InternalReference {
             voice_id: Some(voice.voice_id),
             checksum: Some(voice.checksum),
@@ -294,6 +326,11 @@ async fn resolve_references(
                 AppError::BadRequest("reference audio_base64 is required".to_string())
             })?;
         let audio_bytes = decode_audio(audio_base64)?;
+        tracing::info!(
+            content_type = %reference.content_type.as_deref().unwrap_or("audio/wav"),
+            size_bytes = audio_bytes.len(),
+            "resolved inline audio reference"
+        );
         references.push(InternalReference {
             voice_id: None,
             checksum: None,
@@ -352,6 +389,14 @@ async fn non_streaming_inference(
                     return binary_response(StatusCode::OK, content_type, audio.freeze());
                 }
                 WorkerEvent::Error(error) => {
+                    tracing::warn!(
+                        worker_id = %worker_id,
+                        request_id = %error.request_id,
+                        code = %error.code,
+                        retryable = error.retryable,
+                        message = %error.message,
+                        "worker returned non-streaming inference error"
+                    );
                     if should_retry(&state, &error, audio.is_empty()) {
                         exclude.insert(worker_id.clone());
                         retry = true;
@@ -400,6 +445,7 @@ async fn stream_inference(
             Some(WorkerEvent::Chunk(first_chunk)) => {
                 let content_type = first_chunk.content_type;
                 let first_bytes = first_chunk.bytes;
+                let body_worker_id = worker_id.clone();
                 let body_stream = stream! {
                     yield Ok::<Bytes, std::io::Error>(Bytes::from(first_bytes));
                     while let Some(event) = rx.recv().await {
@@ -407,6 +453,14 @@ async fn stream_inference(
                             WorkerEvent::Chunk(chunk) => yield Ok::<Bytes, std::io::Error>(Bytes::from(chunk.bytes)),
                             WorkerEvent::Done => break,
                             WorkerEvent::Error(error) => {
+                                tracing::warn!(
+                                    worker_id = %body_worker_id,
+                                    request_id = %error.request_id,
+                                    code = %error.code,
+                                    retryable = error.retryable,
+                                    message = %error.message,
+                                    "worker returned streaming inference error after first chunk"
+                                );
                                 yield Err(std::io::Error::new(std::io::ErrorKind::Other, error.message));
                                 break;
                             }
@@ -428,6 +482,14 @@ async fn stream_inference(
                     .map_err(|error| AppError::Internal(anyhow::Error::from(error)));
             }
             Some(WorkerEvent::Error(error)) => {
+                tracing::warn!(
+                    worker_id = %worker_id,
+                    request_id = %error.request_id,
+                    code = %error.code,
+                    retryable = error.retryable,
+                    message = %error.message,
+                    "worker returned streaming inference error"
+                );
                 if should_retry(&state, &error, true) {
                     exclude.insert(worker_id);
                     continue;
@@ -471,8 +533,26 @@ async fn dispatch_once(
             stream,
             deadline_ms: None,
         });
+        let reference_summary = reference_summary(&references);
+        tracing::info!(
+            worker_id = %worker.worker_id,
+            request_id = %request_id,
+            api_kind = %api_kind,
+            stream,
+            references = reference_summary.total,
+            metadata_references = reference_summary.metadata,
+            inline_references = reference_summary.inline,
+            inline_audio_bytes = reference_summary.inline_audio_bytes,
+            excluded_workers = exclude.len(),
+            "dispatching inference request to worker"
+        );
 
         if worker.tx.send(message).await.is_err() {
+            tracing::warn!(
+                worker_id = %worker.worker_id,
+                request_id = %request_id,
+                "failed to send inference request to worker"
+            );
             state.pending.remove(&request_id);
             worker.manager_inflight.fetch_sub(1, Ordering::Relaxed);
             exclude.insert(worker.worker_id);
@@ -480,6 +560,31 @@ async fn dispatch_once(
         }
 
         return Ok((worker.worker_id, rx));
+    }
+}
+
+#[derive(Debug)]
+struct ReferenceSummary {
+    total: usize,
+    metadata: usize,
+    inline: usize,
+    inline_audio_bytes: usize,
+}
+
+fn reference_summary(references: &[InternalReference]) -> ReferenceSummary {
+    let metadata = references
+        .iter()
+        .filter(|reference| reference.voice_id.is_some() && reference.checksum.is_some())
+        .count();
+    let inline_audio_bytes = references
+        .iter()
+        .map(|reference| reference.audio_bytes.len())
+        .sum();
+    ReferenceSummary {
+        total: references.len(),
+        metadata,
+        inline: references.len().saturating_sub(metadata),
+        inline_audio_bytes,
     }
 }
 
