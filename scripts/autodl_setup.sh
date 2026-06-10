@@ -392,7 +392,7 @@ install_sglang_omni() {
     override_args=(--overrides "${generated_overrides_file}")
   fi
 
-  UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv pip install --python "${python_bin}" "${override_args[@]}" -v -e "${SGLANG_OMNI_DIR}"
+  UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv pip install --no-config --python "${python_bin}" "${override_args[@]}" -v -e "${SGLANG_OMNI_DIR}"
   if [ -n "${generated_overrides_file}" ]; then
     rm -f "${generated_overrides_file}"
   fi
