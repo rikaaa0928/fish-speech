@@ -57,7 +57,7 @@ The tested 4090D base image had no `python3` on `PATH`; `scripts/autodl_setup.sh
 
 Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment. Set `INSTALL_TORCH=skip` to skip both PyTorch installation and CUDA validation, for example when preparing non-GPU dependencies on a machine without a GPU; use `INSTALL_SGLANG=0` with it if you also need to avoid SGLang-Omni pulling PyTorch as a dependency.
 
-Python dependencies use the Tsinghua PyPI mirror by default: `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`. PyTorch CUDA wheels use the Aliyun PyTorch wheel mirror by default: `PYTORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
+Python dependencies use the environment's configured pip/uv index by default. Set `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple` only when you want the setup scripts to override the Python package index explicitly. PyTorch CUDA wheels use the Aliyun PyTorch wheel mirror by default: `PYTORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
 
 `scripts/autodl_setup.sh` prepares the standard worker environment only. It intentionally does not prepare `fish-manager`. Rust is installed by `scripts/autodl_start_manager.sh` only when you need to run a local manager for testing.
 

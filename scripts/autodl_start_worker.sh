@@ -10,7 +10,7 @@ AUTO_SETUP="${AUTO_SETUP:-1}"
 ENV_WORKER_MANAGE_SGLANG="${WORKER_MANAGE_SGLANG-}"
 WORKER_MANAGE_SGLANG="${WORKER_MANAGE_SGLANG:-1}"
 SGLANG_OMNI_DIR="${SGLANG_OMNI_DIR:-/root/src/sglang-omni}"
-PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-}"
 UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone}"
 
 ENV_MANAGER_URL="${MANAGER_URL-}"
@@ -130,9 +130,14 @@ restore_env_overrides() {
   if [ -n "${ENV_MODEL_REQUIRED_FILES}" ]; then export MODEL_REQUIRED_FILES="${ENV_MODEL_REQUIRED_FILES}"; fi
 }
 
-export PIP_INDEX_URL="${PIP_INDEX_URL:-${PYPI_INDEX_URL}}"
-export UV_INDEX_URL="${UV_INDEX_URL:-${PYPI_INDEX_URL}}"
-export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${PYPI_INDEX_URL}}"
+if [ -n "${PYPI_INDEX_URL}" ]; then
+  export PIP_INDEX_URL="${PIP_INDEX_URL:-${PYPI_INDEX_URL}}"
+  export UV_INDEX_URL="${UV_INDEX_URL:-${PYPI_INDEX_URL}}"
+  export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${PYPI_INDEX_URL}}"
+elif [ -n "${PIP_INDEX_URL:-}" ]; then
+  export UV_INDEX_URL="${UV_INDEX_URL:-${PIP_INDEX_URL}}"
+  export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${PIP_INDEX_URL}}"
+fi
 export UV_PYTHON_INSTALL_MIRROR
 
 resolve_repo_root() {

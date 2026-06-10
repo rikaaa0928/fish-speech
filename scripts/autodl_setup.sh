@@ -8,7 +8,7 @@ REPO_DIR="${REPO_DIR:-/root/src/fish-speech}"
 REPO_REF="${REPO_REF:-}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
-PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-}"
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://mirror.sjtu.edu.cn/pytorch-wheels/cu128}"
 UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone}"
 TORCH_PACKAGES="${TORCH_PACKAGES:-torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0}"
@@ -42,9 +42,14 @@ log() {
   printf '[autodl-setup] %s\n' "$*" >&2
 }
 
-export PIP_INDEX_URL="${PIP_INDEX_URL:-${PYPI_INDEX_URL}}"
-export UV_INDEX_URL="${UV_INDEX_URL:-${PYPI_INDEX_URL}}"
-export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${PYPI_INDEX_URL}}"
+if [ -n "${PYPI_INDEX_URL}" ]; then
+  export PIP_INDEX_URL="${PIP_INDEX_URL:-${PYPI_INDEX_URL}}"
+  export UV_INDEX_URL="${UV_INDEX_URL:-${PYPI_INDEX_URL}}"
+  export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${PYPI_INDEX_URL}}"
+elif [ -n "${PIP_INDEX_URL:-}" ]; then
+  export UV_INDEX_URL="${UV_INDEX_URL:-${PIP_INDEX_URL}}"
+  export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-${PIP_INDEX_URL}}"
+fi
 export UV_PYTHON_INSTALL_MIRROR
 
 run_root() {
@@ -144,13 +149,19 @@ ensure_uv() {
     return 0
   fi
 
-  log "installing uv from ${PYPI_INDEX_URL}"
-  if "${PYTHON_BIN}" -m pip --version >/dev/null 2>&1; then
-    "${PYTHON_BIN}" -m pip install --user --upgrade -i "${PYPI_INDEX_URL}" uv
-  elif python3 -m pip --version >/dev/null 2>&1; then
-    python3 -m pip install --user --upgrade -i "${PYPI_INDEX_URL}" uv
+  local pip_index_args=()
+  if [ -n "${PYPI_INDEX_URL}" ]; then
+    pip_index_args=(-i "${PYPI_INDEX_URL}")
+    log "installing uv from ${PYPI_INDEX_URL}"
   else
-    printf 'pip is required to install uv from the configured domestic PyPI mirror.\n' >&2
+    log "installing uv"
+  fi
+  if "${PYTHON_BIN}" -m pip --version >/dev/null 2>&1; then
+    "${PYTHON_BIN}" -m pip install --user --upgrade "${pip_index_args[@]}" uv
+  elif python3 -m pip --version >/dev/null 2>&1; then
+    python3 -m pip install --user --upgrade "${pip_index_args[@]}" uv
+  else
+    printf 'pip is required to install uv.\n' >&2
     exit 1
   fi
   export PATH="${HOME}/.local/bin:${PATH}"
@@ -283,8 +294,8 @@ setup_worker_venv() {
     rm -rf .venv
     uv venv .venv -p "${PYTHON_BIN}" --system-site-packages
   fi
-  UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv sync --no-dev --inexact
-  uv pip install --python "${worker_dir}/.venv/bin/python" --index-url "${PYPI_INDEX_URL}" --upgrade pip setuptools wheel packaging ninja
+  uv sync --no-dev --inexact
+  uv pip install --python "${worker_dir}/.venv/bin/python" --upgrade pip setuptools wheel packaging ninja
 }
 
 torch_status() {
@@ -349,7 +360,7 @@ install_sglang_omni() {
 
   if [ -n "${SGLANG_INSTALL_SPEC}" ]; then
     log "installing ${SGLANG_INSTALL_SPEC}"
-    uv pip install --python "${python_bin}" --index-url "${PYPI_INDEX_URL}" --upgrade "${SGLANG_INSTALL_SPEC}"
+    uv pip install --python "${python_bin}" --upgrade "${SGLANG_INSTALL_SPEC}"
     return 0
   fi
 
@@ -392,7 +403,7 @@ install_sglang_omni() {
     override_args=(--overrides "${generated_overrides_file}")
   fi
 
-  UV_INDEX_URL="${PYPI_INDEX_URL}" UV_DEFAULT_INDEX="${PYPI_INDEX_URL}" PIP_INDEX_URL="${PYPI_INDEX_URL}" uv pip install --no-config --python "${python_bin}" "${override_args[@]}" -v -e "${SGLANG_OMNI_DIR}"
+  uv pip install --no-config --python "${python_bin}" "${override_args[@]}" -v -e "${SGLANG_OMNI_DIR}"
   if [ -n "${generated_overrides_file}" ]; then
     rm -f "${generated_overrides_file}"
   fi
