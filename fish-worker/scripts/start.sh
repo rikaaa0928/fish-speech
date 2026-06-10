@@ -14,9 +14,18 @@ prepare_sglang_config() {
   local model_dir="${MODEL_DIR:-/models/s2-pro}"
   local generated_dir="${PROJECT_DIR}/.generated"
   local generated_config="${generated_dir}/$(basename "${SGLANG_CONFIG}")"
+  local source_config
   local has_model_path=0
 
   mkdir -p "${generated_dir}"
+  source_config="$(cd "$(dirname "${SGLANG_CONFIG}")" && pwd)/$(basename "${SGLANG_CONFIG}")"
+  generated_config="$(cd "${generated_dir}" && pwd)/$(basename "${SGLANG_CONFIG}")"
+  if [ "${source_config}" = "${generated_config}" ]; then
+    export SGLANG_CONFIG="${generated_config}"
+    return 0
+  fi
+
+  local tmp_config="${generated_config}.tmp.$$"
   while IFS= read -r line; do
     case "${line}" in
       model_path:*)
@@ -27,10 +36,10 @@ prepare_sglang_config() {
         printf '%s\n' "${line}"
         ;;
     esac
-  done <"${SGLANG_CONFIG}" >"${generated_config}"
+  done <"${SGLANG_CONFIG}" >"${tmp_config}"
 
   if [ "${has_model_path}" = "0" ]; then
-    printf 'model_path: %s\n' "${model_dir}" >>"${generated_config}"
+    printf 'model_path: %s\n' "${model_dir}" >>"${tmp_config}"
   fi
 
   if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ] || [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ] || [ -n "${SGLANG_TTS_MAX_NEW_TOKENS:-}" ] || [ -n "${SGLANG_TTS_TORCH_COMPILE:-}" ] || [ -n "${SGLANG_TTS_CUDA_GRAPH:-}" ]; then
@@ -59,9 +68,10 @@ prepare_sglang_config() {
           printf '      disable_cuda_graph: false\n'
         fi
       fi
-    } >>"${generated_config}"
+    } >>"${tmp_config}"
   fi
 
+  mv "${tmp_config}" "${generated_config}"
   export SGLANG_CONFIG="${generated_config}"
 }
 
@@ -70,6 +80,9 @@ if [ -z "${SGLANG_CONFIG+x}" ]; then
 fi
 if [ -z "${MODEL_DIR+x}" ]; then
   export MODEL_DIR=/models/s2-pro
+fi
+if [ -z "${OMP_NUM_THREADS:-}" ]; then
+  unset OMP_NUM_THREADS
 fi
 
 bash "${SCRIPT_DIR}/ensure_model.sh"
