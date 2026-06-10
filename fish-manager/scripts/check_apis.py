@@ -144,6 +144,13 @@ def json_detail(response: httpx.Response) -> str:
     return str(payload)[:300]
 
 
+def http_error_detail(error: httpx.HTTPError) -> str:
+    detail = str(error).strip()
+    if detail:
+        return f"{error.__class__.__name__}: {detail}"
+    return error.__class__.__name__
+
+
 def response_body(response: httpx.Response) -> str | None:
     if not response.content:
         return None
@@ -159,6 +166,36 @@ def response_body(response: httpx.Response) -> str | None:
 def is_binary_response(response: httpx.Response) -> bool:
     content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     return content_type.startswith("audio/") or content_type == "application/octet-stream"
+
+
+def audio_extension(response: httpx.Response) -> str:
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    return {
+        "audio/wav": "wav",
+        "audio/wave": "wav",
+        "audio/x-wav": "wav",
+        "audio/mpeg": "mp3",
+        "audio/mp3": "mp3",
+        "audio/ogg": "ogg",
+        "audio/flac": "flac",
+    }.get(content_type, "bin")
+
+
+def slugify(value: str) -> str:
+    slug = "".join(char.lower() if char.isalnum() else "-" for char in value)
+    return "-".join(part for part in slug.split("-") if part) or "audio"
+
+
+def save_audio_response(name: str, response: httpx.Response, audio_dir: Path | None) -> Path | None:
+    if audio_dir is None or not is_binary_response(response):
+        return None
+
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    filename = f"{timestamp}-{slugify(name)}-{uuid.uuid4().hex[:8]}.{audio_extension(response)}"
+    path = audio_dir / filename
+    path.write_bytes(response.content)
+    return path
 
 
 def result_from_response(
@@ -185,7 +222,7 @@ async def check_health(client: httpx.AsyncClient) -> CheckResult:
     try:
         response = await client.get("/health")
     except httpx.HTTPError as error:
-        return CheckResult("GET /health", False, str(error))
+        return CheckResult("GET /health", False, http_error_detail(error))
 
     def validate(response: httpx.Response) -> str | None:
         if response.json().get("status") != "ok":
@@ -199,7 +236,7 @@ async def check_workers(client: httpx.AsyncClient) -> CheckResult:
     try:
         response = await client.get("/v1/workers")
     except httpx.HTTPError as error:
-        return CheckResult("GET /v1/workers", False, str(error))
+        return CheckResult("GET /v1/workers", False, http_error_detail(error))
 
     def validate(response: httpx.Response) -> str | None:
         data = response.json().get("data")
@@ -214,7 +251,7 @@ async def check_list_voices(client: httpx.AsyncClient) -> CheckResult:
     try:
         response = await client.get("/v1/voices", params={"limit": 1})
     except httpx.HTTPError as error:
-        return CheckResult("GET /v1/voices", False, str(error))
+        return CheckResult("GET /v1/voices", False, http_error_detail(error))
 
     def validate(response: httpx.Response) -> str | None:
         payload = response.json()
@@ -235,7 +272,7 @@ async def create_voice(client: httpx.AsyncClient, voice_id: str) -> tuple[CheckR
     try:
         response = await client.post("/v1/voices", json=payload)
     except httpx.HTTPError as error:
-        return CheckResult("POST /v1/voices", False, str(error)), False
+        return CheckResult("POST /v1/voices", False, http_error_detail(error)), False
 
     def validate(response: httpx.Response) -> str | None:
         payload = response.json()
@@ -251,7 +288,7 @@ async def check_get_voice(client: httpx.AsyncClient, voice_id: str) -> CheckResu
     try:
         response = await client.get(f"/v1/voices/{voice_id}")
     except httpx.HTTPError as error:
-        return CheckResult("GET /v1/voices/{voice_id}", False, str(error))
+        return CheckResult("GET /v1/voices/{voice_id}", False, http_error_detail(error))
 
     def validate(response: httpx.Response) -> str | None:
         if response.json().get("voice_id") != voice_id:
@@ -265,7 +302,7 @@ async def check_delete_voice(client: httpx.AsyncClient, voice_id: str) -> CheckR
     try:
         response = await client.delete(f"/v1/voices/{voice_id}")
     except httpx.HTTPError as error:
-        return CheckResult("DELETE /v1/voices/{voice_id}", False, str(error))
+        return CheckResult("DELETE /v1/voices/{voice_id}", False, http_error_detail(error))
     return result_from_response("DELETE /v1/voices/{voice_id}", response, 204)
 
 
@@ -280,6 +317,7 @@ async def check_audio_speech(
     client: httpx.AsyncClient,
     voice_id: str | None,
     require_worker: bool,
+    audio_dir: Path | None,
 ) -> CheckResult:
     payload = {
         "input": "fish-manager api availability test",
@@ -290,14 +328,15 @@ async def check_audio_speech(
     try:
         response = await client.post("/v1/audio/speech", json=payload)
     except httpx.HTTPError as error:
-        return CheckResult("POST /v1/audio/speech", False, str(error))
-    return inference_result("POST /v1/audio/speech", response, require_worker)
+        return CheckResult("POST /v1/audio/speech", False, http_error_detail(error))
+    return inference_result("POST /v1/audio/speech", response, require_worker, audio_dir)
 
 
 async def check_fish_tts(
     client: httpx.AsyncClient,
     voice_id: str | None,
     require_worker: bool,
+    audio_dir: Path | None,
 ) -> CheckResult:
     payload = {
         "text": "fish-manager api availability test",
@@ -311,8 +350,8 @@ async def check_fish_tts(
     try:
         response = await client.post("/v1/tts", json=payload)
     except httpx.HTTPError as error:
-        return CheckResult("POST /v1/tts", False, str(error))
-    return inference_result("POST /v1/tts", response, require_worker)
+        return CheckResult("POST /v1/tts", False, http_error_detail(error))
+    return inference_result("POST /v1/tts", response, require_worker, audio_dir)
 
 
 def add_reference_payload(payload: dict[str, Any], voice_id: str | None) -> None:
@@ -330,12 +369,21 @@ def reference_payload() -> dict[str, str]:
     }
 
 
-def inference_result(name: str, response: httpx.Response, require_worker: bool) -> CheckResult:
+def inference_result(
+    name: str,
+    response: httpx.Response,
+    require_worker: bool,
+    audio_dir: Path | None,
+) -> CheckResult:
     if response.status_code == 200:
         content_type = response.headers.get("content-type", "")
         size = len(response.content)
         body = None if is_binary_response(response) else response_body(response)
-        return CheckResult(name, True, f"HTTP 200, content-type={content_type}, bytes={size}", response_body=body)
+        saved_path = save_audio_response(name, response, audio_dir)
+        detail = f"HTTP 200, content-type={content_type}, bytes={size}"
+        if saved_path is not None:
+            detail = f"{detail}, saved={saved_path}"
+        return CheckResult(name, True, detail, response_body=body)
     if response.status_code == 429 and not require_worker:
         return CheckResult(
             name,
@@ -405,18 +453,18 @@ async def run_checks(args: argparse.Namespace) -> list[CheckResult]:
                 for name in skipped
             )
             if "audio-speech" in selected:
-                results.append(await check_audio_speech(client, None, args.require_worker))
+                results.append(await check_audio_speech(client, None, args.require_worker, args.audio_dir))
             if "tts" in selected:
-                results.append(await check_fish_tts(client, None, args.require_worker))
+                results.append(await check_fish_tts(client, None, args.require_worker, args.audio_dir))
         else:
             try:
-                voice_ref = voice_id if voice_created else None
+                voice_ref = voice_id if voice_created else args.voice_id
                 if "voices-get" in selected:
                     results.append(await check_get_voice(client, voice_id))
                 if "audio-speech" in selected:
-                    results.append(await check_audio_speech(client, voice_ref, args.require_worker))
+                    results.append(await check_audio_speech(client, voice_ref, args.require_worker, args.audio_dir))
                 if "tts" in selected:
-                    results.append(await check_fish_tts(client, voice_ref, args.require_worker))
+                    results.append(await check_fish_tts(client, voice_ref, args.require_worker, args.audio_dir))
             finally:
                 if "voices-delete" in selected and voice_created:
                     results.append(await check_delete_voice(client, voice_id))
@@ -482,6 +530,16 @@ def parse_args() -> argparse.Namespace:
         help="fail TTS checks unless a healthy worker returns HTTP 200",
     )
     parser.add_argument(
+        "--voice-id",
+        default=os.getenv("FISH_MANAGER_CHECK_VOICE_ID", "leijun"),
+        help="existing voice ID for speech checks when not creating a temporary voice, default: leijun",
+    )
+    parser.add_argument(
+        "--audio-dir",
+        default=os.getenv("FISH_MANAGER_CHECK_AUDIO_DIR", str(script_root / "run" / "check_apis")),
+        help="directory for saved audio responses; set empty to disable saving",
+    )
+    parser.add_argument(
         "--only",
         action="append",
         metavar="CHECK",
@@ -493,6 +551,7 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
     args.selected_checks = parse_selected_checks(args.only, parser)
+    args.audio_dir = Path(args.audio_dir) if args.audio_dir else None
 
     if args.selected_checks & AUTH_CHECKS and not args.api_key:
         parser.error("--api-key is required unless OPENAI_API_KEY or OPENAI_API_KEYS is set")
