@@ -68,6 +68,9 @@ prepare_sglang_config() {
 if [ -z "${SGLANG_CONFIG+x}" ]; then
   export SGLANG_CONFIG=configs/s2pro_tts.yaml
 fi
+if [ -z "${MODEL_DIR+x}" ]; then
+  export MODEL_DIR=/models/s2-pro
+fi
 
 bash "${SCRIPT_DIR}/ensure_model.sh"
 prepare_sglang_config

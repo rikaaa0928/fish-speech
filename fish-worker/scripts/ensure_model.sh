@@ -12,6 +12,32 @@ HFD_TOOL="${HFD_TOOL:-aria2c}"
 HFD_THREADS="${HFD_THREADS:-8}"
 HFD_EXTRA_ARGS="${HFD_EXTRA_ARGS:-}"
 
+print_model_state() {
+  echo "model dir: ${MODEL_DIR}"
+  echo "required model files: ${MODEL_REQUIRED_FILES}"
+
+  if [ ! -d "${MODEL_DIR}" ]; then
+    echo "model dir does not exist yet"
+    return 0
+  fi
+
+  if [ -z "$(ls -A "${MODEL_DIR}" 2>/dev/null || true)" ]; then
+    echo "model dir is empty"
+  fi
+
+  for file in ${MODEL_REQUIRED_FILES}; do
+    if [ ! -e "${MODEL_DIR}/${file}" ]; then
+      echo "missing required model file: ${file}"
+    elif [ ! -s "${MODEL_DIR}/${file}" ]; then
+      echo "empty required model file: ${file}"
+    fi
+
+    if [ -e "${MODEL_DIR}/${file}.aria2" ]; then
+      echo "aria2 state file exists for ${file}: ${MODEL_DIR}/${file}.aria2"
+    fi
+  done
+}
+
 model_complete() {
   if [ ! -d "${MODEL_DIR}" ] || [ -z "$(ls -A "${MODEL_DIR}" 2>/dev/null || true)" ]; then
     return 1
@@ -22,12 +48,17 @@ model_complete() {
       return 1
     fi
   done
+
+  return 0
 }
 
+print_model_state
 if model_complete; then
   echo "model already exists at ${MODEL_DIR}"
   exit 0
 fi
+
+echo "model is incomplete at ${MODEL_DIR}; starting download"
 
 mkdir -p "${MODEL_DIR}"
 mkdir -p "$(dirname "${HFD_SCRIPT}")"
