@@ -44,6 +44,7 @@ Useful overrides:
 - `MANAGER_BIND_ADDR=0.0.0.0:8080`
 - `OPENAI_API_KEYS=sk-live-1,sk-live-2`
 - `WORKER_TOKEN=replace-me`
+- `MAX_REQUEST_BODY_BYTES=67108864`
 - `AUTODL_FS=/root/autodl-fs`
 - `MANAGER_PROFILE=debug`
 - `CARGO_REGISTRY_URL=sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/`

@@ -6,6 +6,12 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${PROJECT_DIR}"
 
+normalize_thread_env() {
+  case "${OMP_NUM_THREADS:-}" in
+    ''|*[!0-9]*|0) export OMP_NUM_THREADS=1 ;;
+  esac
+}
+
 prepare_sglang_config() {
   if [ "${WORKER_MANAGE_SGLANG:-1}" = "0" ] || [ -z "${SGLANG_CONFIG:-}" ] || [ ! -f "${SGLANG_CONFIG}" ]; then
     return
@@ -81,9 +87,7 @@ fi
 if [ -z "${MODEL_DIR+x}" ]; then
   export MODEL_DIR=/models/s2-pro
 fi
-if [ -z "${OMP_NUM_THREADS:-}" ]; then
-  unset OMP_NUM_THREADS
-fi
+normalize_thread_env
 
 bash "${SCRIPT_DIR}/ensure_model.sh"
 prepare_sglang_config

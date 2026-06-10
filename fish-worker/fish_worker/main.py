@@ -42,6 +42,14 @@ def env_bool(name: str, default: bool) -> bool:
     return value not in {"0", "false", "False", "no", "NO"}
 
 
+def normalized_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    omp_threads = env.get("OMP_NUM_THREADS", "")
+    if not omp_threads.isdecimal() or int(omp_threads) < 1:
+        env["OMP_NUM_THREADS"] = "1"
+    return env
+
+
 @dataclass(frozen=True)
 class Config:
     manager_url: str
@@ -147,7 +155,7 @@ class Worker:
                 args.extend(shlex.split(extra_args))
 
         print(f"starting SGLang: {' '.join(args)}", flush=True)
-        return await asyncio.create_subprocess_exec(*args)
+        return await asyncio.create_subprocess_exec(*args, env=normalized_subprocess_env())
 
     async def wait_sglang_ready(self) -> None:
         deadline = time.monotonic() + env_int("SGLANG_STARTUP_TIMEOUT_SECONDS", 900)

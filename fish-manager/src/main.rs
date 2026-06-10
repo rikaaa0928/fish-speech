@@ -10,7 +10,7 @@ mod workers;
 use std::sync::Arc;
 
 use anyhow::Context;
-use axum::Router;
+use axum::{extract::DefaultBodyLimit, Router};
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -33,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app: Router = build_router(state)
         .layer(TraceLayer::new_for_http())
+        .layer(DefaultBodyLimit::max(config.max_request_body_bytes))
         .layer(CorsLayer::permissive());
 
     let listener = TcpListener::bind(config.bind_addr)

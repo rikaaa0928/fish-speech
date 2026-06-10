@@ -10,6 +10,7 @@ pub struct Config {
     pub sqlite_path: PathBuf,
     pub blob_local_dir: PathBuf,
     pub retry_on_worker_overload: bool,
+    pub max_request_body_bytes: usize,
 }
 
 impl Config {
@@ -45,6 +46,10 @@ impl Config {
         let retry_on_worker_overload = env::var("MANAGER_RETRY_ON_WORKER_OVERLOAD")
             .map(|value| value != "0")
             .unwrap_or(true);
+        let max_request_body_bytes = env::var("MAX_REQUEST_BODY_BYTES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(64 * 1024 * 1024);
 
         Ok(Self {
             bind_addr,
@@ -53,6 +58,7 @@ impl Config {
             sqlite_path,
             blob_local_dir,
             retry_on_worker_overload,
+            max_request_body_bytes,
         })
     }
 }
