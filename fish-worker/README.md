@@ -51,7 +51,7 @@ bash scripts/autodl_start_worker.sh
 
 The setup script prepares the worker only. It installs `uv`, creates `.venv` with `--system-site-packages`, reuses the AutoDL image's PyTorch CUDA environment by default, installs SGLang-Omni, writes `fish-worker/.env`, downloads `hfd.sh`, and downloads `fishaudio/s2-pro` with `hfd.sh` to `/autodl-fs/data/models/s2-pro` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
 
-SGLang-Omni can pin a newer CUDA 12.8 PyTorch release than the base AutoDL image. The setup check accepts worker venvs with CUDA-available PyTorch `2.8.x` or `2.9.x`; the tested SGLang-Omni checkout currently installs `torch==2.9.1`.
+SGLang-Omni can pin a newer CUDA 12.8 PyTorch release than the base AutoDL image. The setup check accepts worker venvs with PyTorch `2.8.x` or `2.9.x` built for CUDA 12.8; `torch.cuda.is_available()` is logged but does not make the version check fail. The tested SGLang-Omni checkout currently installs `torch==2.9.1`.
 
 The tested 4090D base image had no `python3` on `PATH`; `scripts/autodl_setup.sh` selects `/root/miniconda3/bin/python` automatically when present. It also applies a default uv override, `SGLANG_OMNI_UV_OVERRIDES=protobuf>=6.31.1,<7.0.0`, for the current SGLang-Omni dependency resolver conflict.
 

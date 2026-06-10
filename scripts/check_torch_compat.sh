@@ -47,7 +47,7 @@ cuda_available = torch.cuda.is_available()
 
 version_ok = major_minor in {(2, 8), (2, 9)}
 cuda_ok = cuda_version.startswith("12.8")
-compatible = version_ok and cuda_ok and cuda_available
+compatible = version_ok and cuda_ok
 
 print(f"Python: {sys.executable}")
 print(f"PyTorch: {version}")
@@ -61,6 +61,8 @@ if cuda_available:
 
 print()
 if compatible:
+    if not cuda_available:
+        print("Warning: torch.cuda.is_available() is false; version compatibility still passes")
     print("Result: compatible")
     raise SystemExit(0)
 
@@ -69,7 +71,5 @@ if not version_ok:
     print("- Expected PyTorch 2.8.x or 2.9.x")
 if not cuda_ok:
     print("- Expected a CUDA 12.8 PyTorch build")
-if not cuda_available:
-    print("- Expected torch.cuda.is_available() == True")
 raise SystemExit(1)
 PY

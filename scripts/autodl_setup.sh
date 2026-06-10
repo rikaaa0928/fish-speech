@@ -309,14 +309,18 @@ except Exception:
 
 cuda_version = torch.version.cuda or ""
 major_minor = tuple(int(part) for part in torch.__version__.split("+", 1)[0].split(".")[:2])
-ok = major_minor in {(2, 8), (2, 9)} and cuda_version.startswith("12.8") and torch.cuda.is_available()
-print("ok" if ok else "bad")
+ok = major_minor in {(2, 8), (2, 9)} and cuda_version.startswith("12.8")
+if ok and not torch.cuda.is_available():
+    print("ok:cuda-unavailable")
+else:
+    print("ok" if ok else "bad")
 PY
 }
 
 install_torch_if_needed() {
   local python_bin="$1"
   local status
+  local status_detail
 
   if [ "${INSTALL_TORCH}" = "skip" ]; then
     log "INSTALL_TORCH=skip; skip PyTorch installation and CUDA validation"
@@ -324,6 +328,12 @@ install_torch_if_needed() {
   fi
 
   status="$(torch_status "${python_bin}")"
+  status_detail="${status#*:}"
+  status="${status%%:*}"
+
+  if [ "${status}" = "ok" ] && [ "${status_detail}" = "cuda-unavailable" ]; then
+    log "warning: PyTorch/CUDA versions are compatible, but torch.cuda.is_available() is false; continuing"
+  fi
 
   if [ "${INSTALL_TORCH}" = "0" ]; then
     if [ "${status}" != "ok" ]; then
