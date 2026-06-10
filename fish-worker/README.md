@@ -49,15 +49,15 @@ Start the worker after setup:
 bash scripts/autodl_start_worker.sh
 ```
 
-The setup script prepares the worker only. It installs `uv`, creates `.venv`, reuses the AutoDL image's PyTorch CUDA environment when available, installs PyTorch `2.8.0+cu128` only when missing or incompatible, installs SGLang-Omni, writes `fish-worker/.env`, downloads `hfd.sh`, and downloads `fishaudio/s2-pro` with `hfd.sh` to `/autodl-fs/data/models/s2-pro` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
+The setup script prepares the worker only. It installs `uv`, creates `.venv` with `--system-site-packages`, reuses the AutoDL image's PyTorch CUDA environment by default, installs SGLang-Omni, writes `fish-worker/.env`, downloads `hfd.sh`, and downloads `fishaudio/s2-pro` with `hfd.sh` to `/autodl-fs/data/models/s2-pro` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
 
 SGLang-Omni can pin a newer CUDA 12.8 PyTorch release than the base AutoDL image. The setup check accepts worker venvs with CUDA-available PyTorch `2.8.x` or `2.9.x`; the tested SGLang-Omni checkout currently installs `torch==2.9.1`.
 
 The tested 4090D base image had no `python3` on `PATH`; `scripts/autodl_setup.sh` selects `/root/miniconda3/bin/python` automatically when present. It also applies a default uv override, `SGLANG_OMNI_UV_OVERRIDES=protobuf>=6.31.1,<7.0.0`, for the current SGLang-Omni dependency resolver conflict.
 
-Set `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment. Set `INSTALL_TORCH=skip` to skip both PyTorch installation and CUDA validation, for example when preparing non-GPU dependencies on a machine without a GPU; use `INSTALL_SGLANG=0` with it if you also need to avoid SGLang-Omni pulling PyTorch as a dependency.
+`INSTALL_TORCH=skip` is the default: it skips both PyTorch installation and CUDA validation so setup can run on a non-GPU machine while reusing the AutoDL image's PyTorch CUDA packages through `--system-site-packages`. Set `INSTALL_TORCH=auto` to install PyTorch only when the current CUDA environment is missing or incompatible, `INSTALL_TORCH=1` to force reinstall PyTorch, or `INSTALL_TORCH=0` to skip PyTorch installation and only validate the existing environment.
 
-Python dependencies use the environment's configured pip/uv index by default. Set `PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple` only when you want the setup scripts to override the Python package index explicitly. PyTorch CUDA wheels use the Aliyun PyTorch wheel mirror by default: `PYTORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
+Python dependencies use the Aliyun PyPI mirror by default: `PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple`. PyTorch CUDA wheels use the Aliyun PyTorch wheel mirror by default: `PYTORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
 
 `scripts/autodl_setup.sh` prepares the standard worker environment only. It intentionally does not prepare `fish-manager`. Rust is installed by `scripts/autodl_start_manager.sh` only when you need to run a local manager for testing.
 

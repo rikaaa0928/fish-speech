@@ -8,11 +8,11 @@ REPO_DIR="${REPO_DIR:-/root/src/fish-speech}"
 REPO_REF="${REPO_REF:-}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
-PYPI_INDEX_URL="${PYPI_INDEX_URL:-}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://mirror.sjtu.edu.cn/pytorch-wheels/cu128}"
 UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone}"
 TORCH_PACKAGES="${TORCH_PACKAGES:-torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0}"
-INSTALL_TORCH="${INSTALL_TORCH:-auto}"
+INSTALL_TORCH="${INSTALL_TORCH:-skip}"
 INSTALL_SGLANG_OMNI="${INSTALL_SGLANG_OMNI:-1}"
 INSTALL_SGLANG="${INSTALL_SGLANG:-${INSTALL_SGLANG_OMNI}}"
 SGLANG_INSTALL_SPEC="${SGLANG_INSTALL_SPEC:-}"
@@ -403,6 +403,8 @@ install_sglang_omni() {
     override_args=(--overrides "${generated_overrides_file}")
   fi
 
+  log "http_proxy=${http_proxy-}"
+  log "https_proxy=${https_proxy-}"
   uv pip install --no-config --python "${python_bin}" "${override_args[@]}" -v -e "${SGLANG_OMNI_DIR}"
   if [ -n "${generated_overrides_file}" ]; then
     rm -f "${generated_overrides_file}"

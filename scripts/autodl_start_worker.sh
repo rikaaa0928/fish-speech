@@ -10,7 +10,7 @@ AUTO_SETUP="${AUTO_SETUP:-1}"
 ENV_WORKER_MANAGE_SGLANG="${WORKER_MANAGE_SGLANG-}"
 WORKER_MANAGE_SGLANG="${WORKER_MANAGE_SGLANG:-1}"
 SGLANG_OMNI_DIR="${SGLANG_OMNI_DIR:-/root/src/sglang-omni}"
-PYPI_INDEX_URL="${PYPI_INDEX_URL:-}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
 UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone}"
 
 ENV_MANAGER_URL="${MANAGER_URL-}"
