@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import aiohttp
 import msgpack
@@ -108,6 +109,7 @@ class Worker:
     async def run(self) -> None:
         self.config.cache_dir.mkdir(parents=True, exist_ok=True)
         (self.config.cache_dir / "refs").mkdir(parents=True, exist_ok=True)
+        (self.config.cache_dir / "refs" / "voices").mkdir(parents=True, exist_ok=True)
 
         if self.config.manage_sglang:
             self.sglang_process = await self.start_sglang()
@@ -254,10 +256,18 @@ class Worker:
             refs = []
             for index, ref in enumerate(request.get("references") or []):
                 content_type = ref.get("content_type") or "audio/wav"
-                suffix = suffix_for_content_type(content_type)
-                path = self.config.cache_dir / "refs" / f"{request_id}_{index}{suffix}"
-                path.write_bytes(ref["audio_bytes"])
-                temp_files.append(path)
+                voice_id = ref.get("voice_id")
+                checksum = ref.get("checksum")
+                if voice_id and checksum:
+                    path = await self.cached_voice_reference_path(voice_id, checksum, content_type)
+                else:
+                    audio_bytes = ref.get("audio_bytes")
+                    if audio_bytes is None:
+                        raise ValueError("reference must include voice_id/checksum or audio_bytes")
+                    suffix = suffix_for_content_type(content_type)
+                    path = self.config.cache_dir / "refs" / f"{request_id}_{index}{suffix}"
+                    path.write_bytes(audio_bytes)
+                    temp_files.append(path)
                 refs.append({"audio_path": str(path), "text": ref["text"]})
 
             if refs:
@@ -277,6 +287,36 @@ class Worker:
             for path in temp_files:
                 with contextlib.suppress(FileNotFoundError):
                     path.unlink()
+
+    async def cached_voice_reference_path(self, voice_id: str, checksum: str, content_type: str) -> Path:
+        suffix = suffix_for_content_type(content_type)
+        voice_dir = self.config.cache_dir / "refs" / "voices" / safe_path_component(voice_id)
+        path = voice_dir / f"{safe_path_component(checksum)}{suffix}"
+        if path.exists() and path.stat().st_size > 0:
+            return path
+
+        voice_dir.mkdir(parents=True, exist_ok=True)
+        audio = await self.download_voice_audio(voice_id, checksum)
+        tmp_path = voice_dir / f".{path.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            tmp_path.write_bytes(audio)
+            tmp_path.replace(path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+        return path
+
+    async def download_voice_audio(self, voice_id: str, checksum: str) -> bytes:
+        base_url = manager_http_base_url(self.config.manager_url)
+        query = urlencode({"checksum": checksum})
+        url = f"{base_url}/internal/voices/{quote(voice_id, safe='')}/audio?{query}"
+        headers = {"Authorization": f"Bearer {self.config.worker_token}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=None) as response:
+                if response.status >= 400:
+                    text = await response.text()
+                    raise RuntimeError(f"failed to fetch voice {voice_id}: HTTP {response.status}: {text}")
+                return await response.read()
 
     async def call_sglang(self, ws: Any, request_id: str, payload: dict[str, Any], stream: bool) -> bool:
         async with aiohttp.ClientSession() as session:
@@ -354,6 +394,20 @@ async def send_error(ws: Any, request_id: str, code: str, message: str, retryabl
 def append_token(url: str, token: str) -> str:
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}token={token}"
+
+
+def manager_http_base_url(manager_url: str) -> str:
+    parts = urlsplit(manager_url)
+    scheme = {"ws": "http", "wss": "https"}.get(parts.scheme, parts.scheme)
+    path = parts.path.rstrip("/")
+    suffix = "/internal/workers/ws"
+    if path.endswith(suffix):
+        path = path[: -len(suffix)]
+    return urlunsplit((scheme, parts.netloc, path.rstrip("/"), "", ""))
+
+
+def safe_path_component(value: str) -> str:
+    return quote(value, safe="._-")
 
 
 def suffix_for_content_type(content_type: str) -> str:

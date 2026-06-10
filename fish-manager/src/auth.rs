@@ -22,3 +22,21 @@ pub fn require_openai_auth(headers: &HeaderMap, config: &Config) -> AppResult<()
         Err(AppError::Unauthorized)
     }
 }
+
+pub fn require_worker_auth(headers: &HeaderMap, config: &Config) -> AppResult<()> {
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+
+    let token = auth
+        .strip_prefix("Bearer ")
+        .ok_or(AppError::Unauthorized)?
+        .trim();
+
+    if token == config.worker_token {
+        Ok(())
+    } else {
+        Err(AppError::Unauthorized)
+    }
+}

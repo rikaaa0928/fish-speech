@@ -4,7 +4,7 @@ use async_stream::stream;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::{
-    auth::require_openai_auth,
+    auth::{require_openai_auth, require_worker_auth},
     error::{AppError, AppResult},
     protocol::{InferenceError, InferenceRequest, InternalReference, WireMessage},
     state::{AppState, PendingRequest, WorkerEvent},
@@ -32,6 +32,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/tts", post(fish_tts))
         .route("/v1/voices", post(create_voice).get(list_voices))
         .route("/v1/voices/:voice_id", get(get_voice).delete(delete_voice))
+        .route(
+            "/internal/voices/:voice_id/audio",
+            get(get_internal_voice_audio),
+        )
         .route("/internal/workers/ws", get(worker_ws_handler))
         .with_state(state)
 }
@@ -121,6 +125,42 @@ async fn delete_voice(
     require_openai_auth(&headers, &state.config)?;
     state.voice_store.delete_voice(&voice_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct InternalVoiceAudioQuery {
+    checksum: Option<String>,
+}
+
+async fn get_internal_voice_audio(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(voice_id): Path<String>,
+    Query(query): Query<InternalVoiceAudioQuery>,
+) -> AppResult<Response> {
+    require_worker_auth(&headers, &state.config)?;
+    let voice = state
+        .voice_store
+        .get_voice(&voice_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("voice not found".to_string()))?;
+
+    if query
+        .checksum
+        .as_deref()
+        .is_some_and(|checksum| checksum != voice.checksum)
+    {
+        return Err(AppError::NotFound("voice checksum not found".to_string()));
+    }
+
+    let audio = state.voice_store.get_voice_audio(&voice).await?;
+    let mut response = binary_response(StatusCode::OK, voice.content_type, audio)?;
+    response.headers_mut().insert(
+        "x-voice-checksum",
+        HeaderValue::from_str(&voice.checksum)
+            .map_err(|error| AppError::Internal(anyhow::Error::from(error)))?,
+    );
+    Ok(response)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -229,9 +269,10 @@ async fn resolve_references(
             .get_voice(voice_id)
             .await?
             .ok_or_else(|| AppError::NotFound("voice not found".to_string()))?;
-        let audio = state.voice_store.get_voice_audio(&voice).await?;
         references.push(InternalReference {
-            audio_bytes: audio.to_vec(),
+            voice_id: Some(voice.voice_id),
+            checksum: Some(voice.checksum),
+            audio_bytes: Vec::new(),
             content_type: voice.content_type,
             text: voice.text,
         });
@@ -254,6 +295,8 @@ async fn resolve_references(
             })?;
         let audio_bytes = decode_audio(audio_base64)?;
         references.push(InternalReference {
+            voice_id: None,
+            checksum: None,
             audio_bytes,
             content_type: reference
                 .content_type

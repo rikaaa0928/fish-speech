@@ -49,7 +49,11 @@ pub struct Heartbeat {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternalReference {
-    #[serde(with = "serde_bytes")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "serde_bytes")]
     pub audio_bytes: Vec<u8>,
     pub content_type: String,
     pub text: String,
