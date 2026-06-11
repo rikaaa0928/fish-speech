@@ -27,7 +27,6 @@ from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 import httpx
 import websockets
 
-
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 CHECK_ORDER = [
     "health",
@@ -164,12 +163,18 @@ def response_body(response: httpx.Response) -> str | None:
 
 
 def is_binary_response(response: httpx.Response) -> bool:
-    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    return content_type.startswith("audio/") or content_type == "application/octet-stream"
+    content_type = (
+        response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    )
+    return (
+        content_type.startswith("audio/") or content_type == "application/octet-stream"
+    )
 
 
 def audio_extension(response: httpx.Response) -> str:
-    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    content_type = (
+        response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    )
     return {
         "audio/wav": "wav",
         "audio/wave": "wav",
@@ -186,7 +191,9 @@ def slugify(value: str) -> str:
     return "-".join(part for part in slug.split("-") if part) or "audio"
 
 
-def save_audio_response(name: str, response: httpx.Response, audio_dir: Path | None) -> Path | None:
+def save_audio_response(
+    name: str, response: httpx.Response, audio_dir: Path | None
+) -> Path | None:
     if audio_dir is None or not is_binary_response(response):
         return None
 
@@ -214,8 +221,15 @@ def result_from_response(
     if validate is not None:
         error = validate(response)
         if error:
-            return CheckResult(name, False, error, response_body=response_body(response))
-    return CheckResult(name, True, f"HTTP {response.status_code}", response_body=response_body(response))
+            return CheckResult(
+                name, False, error, response_body=response_body(response)
+            )
+    return CheckResult(
+        name,
+        True,
+        f"HTTP {response.status_code}",
+        response_body=response_body(response),
+    )
 
 
 async def check_health(client: httpx.AsyncClient) -> CheckResult:
@@ -262,7 +276,9 @@ async def check_list_voices(client: httpx.AsyncClient) -> CheckResult:
     return result_from_response("GET /v1/voices", response, 200, validate)
 
 
-async def create_voice(client: httpx.AsyncClient, voice_id: str) -> tuple[CheckResult, bool]:
+async def create_voice(
+    client: httpx.AsyncClient, voice_id: str
+) -> tuple[CheckResult, bool]:
     payload = {
         "voice_id": voice_id,
         "text": "fish-manager api availability test reference",
@@ -302,7 +318,9 @@ async def check_delete_voice(client: httpx.AsyncClient, voice_id: str) -> CheckR
     try:
         response = await client.delete(f"/v1/voices/{voice_id}")
     except httpx.HTTPError as error:
-        return CheckResult("DELETE /v1/voices/{voice_id}", False, http_error_detail(error))
+        return CheckResult(
+            "DELETE /v1/voices/{voice_id}", False, http_error_detail(error)
+        )
     return result_from_response("DELETE /v1/voices/{voice_id}", response, 204)
 
 
@@ -329,7 +347,9 @@ async def check_audio_speech(
         response = await client.post("/v1/audio/speech", json=payload)
     except httpx.HTTPError as error:
         return CheckResult("POST /v1/audio/speech", False, http_error_detail(error))
-    return inference_result("POST /v1/audio/speech", response, require_worker, audio_dir)
+    return inference_result(
+        "POST /v1/audio/speech", response, require_worker, audio_dir
+    )
 
 
 async def check_fish_tts(
@@ -400,14 +420,18 @@ def inference_result(
     )
 
 
-async def check_worker_ws(base_url: str, worker_token: str | None, timeout: float) -> CheckResult:
+async def check_worker_ws(
+    base_url: str, worker_token: str | None, timeout: float
+) -> CheckResult:
     name = "GET /internal/workers/ws"
     if not worker_token:
         return CheckResult(name, True, "WORKER_TOKEN not set; skipped", warning=True)
 
     ws_url = ws_url_from_base(base_url, worker_token)
     try:
-        async with websockets.connect(ws_url, open_timeout=timeout, close_timeout=timeout):
+        async with websockets.connect(
+            ws_url, open_timeout=timeout, close_timeout=timeout
+        ):
             return CheckResult(name, True, "websocket upgrade accepted")
     except Exception as error:  # websockets has version-specific exception classes.
         return CheckResult(name, False, str(error))
@@ -453,18 +477,34 @@ async def run_checks(args: argparse.Namespace) -> list[CheckResult]:
                 for name in skipped
             )
             if "audio-speech" in selected:
-                results.append(await check_audio_speech(client, None, args.require_worker, args.audio_dir))
+                results.append(
+                    await check_audio_speech(
+                        client, None, args.require_worker, args.audio_dir
+                    )
+                )
             if "tts" in selected:
-                results.append(await check_fish_tts(client, None, args.require_worker, args.audio_dir))
+                results.append(
+                    await check_fish_tts(
+                        client, None, args.require_worker, args.audio_dir
+                    )
+                )
         else:
             try:
                 voice_ref = voice_id if voice_created else args.voice_id
                 if "voices-get" in selected:
                     results.append(await check_get_voice(client, voice_id))
                 if "audio-speech" in selected:
-                    results.append(await check_audio_speech(client, voice_ref, args.require_worker, args.audio_dir))
+                    results.append(
+                        await check_audio_speech(
+                            client, voice_ref, args.require_worker, args.audio_dir
+                        )
+                    )
                 if "tts" in selected:
-                    results.append(await check_fish_tts(client, voice_ref, args.require_worker, args.audio_dir))
+                    results.append(
+                        await check_fish_tts(
+                            client, voice_ref, args.require_worker, args.audio_dir
+                        )
+                    )
             finally:
                 if "voices-delete" in selected and voice_created:
                     results.append(await check_delete_voice(client, voice_id))
@@ -473,11 +513,17 @@ async def run_checks(args: argparse.Namespace) -> list[CheckResult]:
             await cleanup_voice(client, voice_id)
 
     if "worker-ws" in selected:
-        results.append(await check_worker_ws(args.base_url.rstrip("/"), args.worker_token, args.timeout))
+        results.append(
+            await check_worker_ws(
+                args.base_url.rstrip("/"), args.worker_token, args.timeout
+            )
+        )
     return results
 
 
-def parse_selected_checks(values: list[str] | None, parser: argparse.ArgumentParser) -> set[str]:
+def parse_selected_checks(
+    values: list[str] | None, parser: argparse.ArgumentParser
+) -> set[str]:
     if not values:
         return set(CHECK_ORDER)
 
@@ -490,7 +536,9 @@ def parse_selected_checks(values: list[str] | None, parser: argparse.ArgumentPar
             checks = CHECK_ALIASES.get(key)
             if checks is None:
                 allowed = ", ".join(sorted(CHECK_ALIASES))
-                parser.error(f"unknown --only value {part!r}; allowed values: {allowed}")
+                parser.error(
+                    f"unknown --only value {part!r}; allowed values: {allowed}"
+                )
             selected.update(checks)
 
     return selected
@@ -521,8 +569,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=float(os.getenv("FISH_MANAGER_CHECK_TIMEOUT", "10")),
-        help="per-request timeout in seconds, default: 10",
+        default=float(os.getenv("FISH_MANAGER_CHECK_TIMEOUT", "300")),
+        help="per-request timeout in seconds, default: 300",
     )
     parser.add_argument(
         "--require-worker",
@@ -536,7 +584,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--audio-dir",
-        default=os.getenv("FISH_MANAGER_CHECK_AUDIO_DIR", str(script_root / "run" / "check_apis")),
+        default=os.getenv(
+            "FISH_MANAGER_CHECK_AUDIO_DIR", str(script_root / "run" / "check_apis")
+        ),
         help="directory for saved audio responses; set empty to disable saving",
     )
     parser.add_argument(
@@ -554,7 +604,9 @@ def parse_args() -> argparse.Namespace:
     args.audio_dir = Path(args.audio_dir) if args.audio_dir else None
 
     if args.selected_checks & AUTH_CHECKS and not args.api_key:
-        parser.error("--api-key is required unless OPENAI_API_KEY or OPENAI_API_KEYS is set")
+        parser.error(
+            "--api-key is required unless OPENAI_API_KEY or OPENAI_API_KEYS is set"
+        )
     return args
 
 
