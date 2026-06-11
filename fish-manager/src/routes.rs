@@ -280,8 +280,9 @@ async fn get_internal_voice_audio(
 struct AudioSpeechRequest {
     input: String,
     #[serde(default)]
+    #[serde(alias = "voice_id")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    voice_id: Option<String>,
+    voice: Option<String>,
     #[serde(default)]
     references: Vec<ClientReference>,
     #[serde(default)]
@@ -331,7 +332,7 @@ async fn fish_tts(
 
     let mapped = AudioSpeechRequest {
         input: request.text,
-        voice_id: request.reference_id,
+        voice: request.reference_id,
         references: request.references,
         response_format: request.format,
         stream: request.streaming,
@@ -387,7 +388,7 @@ async fn resolve_references(
 ) -> AppResult<Vec<InternalReference>> {
     let mut references = Vec::new();
 
-    if let Some(voice_id) = &request.voice_id {
+    if let Some(voice_id) = &request.voice {
         let voice = state
             .voice_store
             .get_voice(voice_id)
@@ -450,6 +451,7 @@ fn normalized_payload(request: &AudioSpeechRequest) -> AppResult<Value> {
     let object = payload
         .as_object_mut()
         .ok_or_else(|| AppError::BadRequest("request must be a JSON object".to_string()))?;
+    object.remove("voice");
     object.remove("voice_id");
     object.remove("references");
     Ok(payload)

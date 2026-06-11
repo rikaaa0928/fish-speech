@@ -153,7 +153,7 @@ curl -X POST http://127.0.0.1:8080/v1/audio/speech \
   -o output.wav \
   -d '{
     "input": "Hello from fish-manager",
-    "voice_id": "speaker_a",
+    "voice": "speaker_a",
     "response_format": "wav"
   }'
 ```

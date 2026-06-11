@@ -422,7 +422,7 @@ async def check_fish_tts(
 
 def add_reference_payload(payload: dict[str, Any], voice_id: str | None) -> None:
     if voice_id:
-        payload["voice_id"] = voice_id
+        payload["voice"] = voice_id
     else:
         payload["references"] = [reference_payload()]
 

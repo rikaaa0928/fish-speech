@@ -253,7 +253,7 @@ async def call_tts(
 ) -> TtsResult:
     payload: dict[str, Any] = {
         "input": sample.text,
-        "voice_id": voice_id,
+        "voice": voice_id,
         "response_format": "wav",
         "stream": False,
     }

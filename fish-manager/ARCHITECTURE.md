@@ -111,7 +111,7 @@ Example:
 ```json
 {
   "input": "Hello, how are you?",
-  "voice_id": "speaker_a",
+  "voice": "speaker_a",
   "response_format": "wav",
   "stream": false,
   "temperature": 0.8,
@@ -125,7 +125,7 @@ Example:
 Supported request concepts:
 
 - `input`: text to synthesize.
-- `voice_id`: manager-side saved voice clone ID.
+- `voice`: manager-side saved voice clone ID, matching the OpenAI speech field name.
 - `references`: direct reference audio objects for one-off cloning.
 - `response_format`: `wav`, `mp3`, `flac`, `opus`, `aac`, or `pcm`, subject to SGLang support.
 - `stream`: stream response through SSE or raw audio mode.
@@ -143,7 +143,7 @@ Mapping:
 text -> input
 format -> response_format
 streaming -> stream
-reference_id -> voice_id
+reference_id -> voice
 references -> references
 top_p -> top_p
 temperature -> temperature
@@ -192,7 +192,7 @@ Valid SGLang request shape:
 
 The manager does not pass its local filesystem paths to workers. Instead:
 
-1. Client sends `voice_id` or direct reference audio.
+1. Client sends `voice` or direct reference audio.
 2. Manager resolves reference metadata and audio bytes through `VoiceStore`.
 3. Manager sends reference audio bytes and text to worker inside the internal request.
 4. Worker writes the audio to a local temporary/cache file.
