@@ -49,7 +49,7 @@ Start the worker after setup:
 bash scripts/autodl_start_worker.sh
 ```
 
-The setup script prepares the worker only. It installs `uv`, creates `.venv` with `--system-site-packages`, reuses the AutoDL image's PyTorch CUDA environment by default, installs SGLang-Omni, writes `fish-worker/.env`, downloads `hfd.sh`, and downloads `fishaudio/s2-pro` with `hfd.sh` to `/autodl-fs/data/models/s2-pro` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
+The setup script prepares the worker only. It installs `uv`, creates `.venv` with `--system-site-packages`, reuses the AutoDL image's PyTorch CUDA environment by default, installs SGLang-Omni, writes `fish-worker/.env`, downloads `hfd.sh` to `/root/autodl-tmp/cache/hfd.sh`, and downloads `fishaudio/s2-pro` with `hfd.sh` to `/autodl-fs/data/models/s2-pro` by default. Override the model load/download path with `MODEL_DIR=/path/to/model`.
 
 SGLang-Omni can pin a newer CUDA 12.8 PyTorch release than the base AutoDL image. The setup check accepts worker venvs with PyTorch `2.8.x` or `2.9.x` built for CUDA 12.8; `torch.cuda.is_available()` is logged but does not make the version check fail. The tested SGLang-Omni checkout currently installs `torch==2.9.1`.
 
@@ -73,7 +73,8 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 - `CONTAINER_MODEL_DIR` and `CONTAINER_CACHE_DIR`: Docker container mount targets, defaults `/models` and `/cache`.
 - `MODEL_ID`: Hugging Face model ID, default `fishaudio/s2-pro`.
 - `MODEL_DIR`: local model directory, Docker default `/models/s2-pro`; AutoDL setup writes `/autodl-fs/data/models/s2-pro`.
-- `HFD_SCRIPT`: `hfd.sh` path, Docker default `/cache/hfd.sh`; AutoDL setup writes `/autodl-fs/data/hfd.sh`.
+- `CACHE_DIR`: runtime cache directory, Docker default `/cache`; AutoDL setup writes `/root/autodl-tmp/cache`.
+- `HFD_SCRIPT`: `hfd.sh` path, Docker default `/cache/hfd.sh`; AutoDL setup writes `/root/autodl-tmp/cache/hfd.sh`.
 - `HFD_TOOL`: `hfd.sh` downloader, default `aria2c`.
 - `HFD_THREADS`: download connections, default `8`.
 - `SGLANG_MAX_RUNNING_REQUESTS`: SGLang concurrency limit.
