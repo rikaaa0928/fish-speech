@@ -152,18 +152,18 @@ max_new_tokens -> max_new_tokens
 seed -> seed
 ```
 
-### Voice APIs
+### Reference APIs
 
 Initial manager endpoints:
 
-- `POST /v1/voices`
-- `GET /v1/voices`
-- `GET /v1/voices/{voice_id}`
-- `DELETE /v1/voices/{voice_id}`
+- `POST /v1/references/add`
+- `GET /v1/references/list`
+- `DELETE /v1/references/delete`
+- `POST /v1/references/update`
 
-Voice creation stores:
+Reference creation stores:
 
-- `voice_id`
+- reference ID
 - reference text
 - reference audio blob or object path
 - content type

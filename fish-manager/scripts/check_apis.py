@@ -31,22 +31,33 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 CHECK_ORDER = [
     "health",
     "workers",
-    "voices-list",
-    "voices-create",
-    "voices-get",
+    "references-list",
+    "references-add",
+    "references-update",
     "audio-speech",
     "tts",
-    "voices-delete",
+    "references-delete",
     "worker-ws",
 ]
-VOICE_CHECKS = {"voices-create", "voices-get", "voices-delete"}
+REFERENCE_CHECKS = {"references-add", "references-update", "references-delete"}
 SPEECH_CHECKS = {"audio-speech", "tts"}
 PUBLIC_CHECKS = set(CHECK_ORDER) - {"worker-ws"}
 AUTH_CHECKS = PUBLIC_CHECKS - {"health"}
 CHECK_ALIASES = {
     "all": set(CHECK_ORDER),
     "public": PUBLIC_CHECKS,
-    "voices": {"voices-list", "voices-create", "voices-get", "voices-delete"},
+    "references": {
+        "references-list",
+        "references-add",
+        "references-update",
+        "references-delete",
+    },
+    "voices": {
+        "references-list",
+        "references-add",
+        "references-update",
+        "references-delete",
+    },
     "speech": SPEECH_CHECKS,
     "health": {"health"},
     "/health": {"health"},
@@ -54,18 +65,24 @@ CHECK_ALIASES = {
     "workers": {"workers"},
     "/v1/workers": {"workers"},
     "get /v1/workers": {"workers"},
-    "voices-list": {"voices-list"},
-    "list-voices": {"voices-list"},
-    "get /v1/voices": {"voices-list"},
-    "voices-create": {"voices-create"},
-    "create-voice": {"voices-create"},
-    "post /v1/voices": {"voices-create"},
-    "voices-get": {"voices-get"},
-    "get-voice": {"voices-get"},
-    "get /v1/voices/{voice_id}": {"voices-get"},
-    "voices-delete": {"voices-delete"},
-    "delete-voice": {"voices-delete"},
-    "delete /v1/voices/{voice_id}": {"voices-delete"},
+    "references-list": {"references-list"},
+    "list-references": {"references-list"},
+    "get /v1/references/list": {"references-list"},
+    "references-add": {"references-add"},
+    "add-reference": {"references-add"},
+    "post /v1/references/add": {"references-add"},
+    "references-update": {"references-update"},
+    "update-reference": {"references-update"},
+    "post /v1/references/update": {"references-update"},
+    "references-delete": {"references-delete"},
+    "delete-reference": {"references-delete"},
+    "delete /v1/references/delete": {"references-delete"},
+    "voices-list": {"references-list"},
+    "list-voices": {"references-list"},
+    "voices-create": {"references-add"},
+    "create-voice": {"references-add"},
+    "voices-delete": {"references-delete"},
+    "delete-voice": {"references-delete"},
     "audio-speech": {"audio-speech"},
     "speech-create": {"audio-speech"},
     "post /v1/audio/speech": {"audio-speech"},
@@ -261,72 +278,101 @@ async def check_workers(client: httpx.AsyncClient) -> CheckResult:
     return result_from_response("GET /v1/workers", response, 200, validate)
 
 
-async def check_list_voices(client: httpx.AsyncClient) -> CheckResult:
+async def check_list_references(client: httpx.AsyncClient) -> CheckResult:
     try:
-        response = await client.get("/v1/voices", params={"limit": 1})
+        response = await client.get("/v1/references/list")
     except httpx.HTTPError as error:
-        return CheckResult("GET /v1/voices", False, http_error_detail(error))
+        return CheckResult("GET /v1/references/list", False, http_error_detail(error))
 
     def validate(response: httpx.Response) -> str | None:
         payload = response.json()
-        if not isinstance(payload.get("voices"), list):
-            return f"expected voices list, got: {json_detail(response)}"
+        if payload.get("success") is not True or not isinstance(
+            payload.get("reference_ids"), list
+        ):
+            return f"expected reference_ids list, got: {json_detail(response)}"
         return None
 
-    return result_from_response("GET /v1/voices", response, 200, validate)
+    return result_from_response("GET /v1/references/list", response, 200, validate)
 
 
-async def create_voice(
-    client: httpx.AsyncClient, voice_id: str
+async def add_reference(
+    client: httpx.AsyncClient, reference_id: str
 ) -> tuple[CheckResult, bool]:
-    payload = {
-        "voice_id": voice_id,
-        "text": "fish-manager api availability test reference",
-        "content_type": "audio/wav",
-        "audio_base64": tiny_wav_base64(),
+    files = {
+        "id": (None, reference_id),
+        "text": (None, "fish-manager api availability test reference"),
+        "audio": ("reference.wav", base64.b64decode(tiny_wav_base64()), "audio/wav"),
     }
     try:
-        response = await client.post("/v1/voices", json=payload)
+        response = await client.post("/v1/references/add", files=files)
     except httpx.HTTPError as error:
-        return CheckResult("POST /v1/voices", False, http_error_detail(error)), False
+        return CheckResult("POST /v1/references/add", False, http_error_detail(error)), False
 
     def validate(response: httpx.Response) -> str | None:
         payload = response.json()
-        if payload.get("voice_id") != voice_id:
-            return f"unexpected voice_id: {json_detail(response)}"
+        if payload.get("success") is not True or payload.get("reference_id") != reference_id:
+            return f"unexpected reference_id: {json_detail(response)}"
         return None
 
-    result = result_from_response("POST /v1/voices", response, 200, validate)
+    result = result_from_response("POST /v1/references/add", response, 200, validate)
     return result, result.ok
 
 
-async def check_get_voice(client: httpx.AsyncClient, voice_id: str) -> CheckResult:
+async def check_update_reference(
+    client: httpx.AsyncClient, old_reference_id: str, new_reference_id: str
+) -> CheckResult:
+    payload = {
+        "old_reference_id": old_reference_id,
+        "new_reference_id": new_reference_id,
+    }
     try:
-        response = await client.get(f"/v1/voices/{voice_id}")
+        response = await client.post("/v1/references/update", json=payload)
     except httpx.HTTPError as error:
-        return CheckResult("GET /v1/voices/{voice_id}", False, http_error_detail(error))
+        return CheckResult("POST /v1/references/update", False, http_error_detail(error))
 
     def validate(response: httpx.Response) -> str | None:
-        if response.json().get("voice_id") != voice_id:
+        payload = response.json()
+        if (
+            payload.get("success") is not True
+            or payload.get("old_reference_id") != old_reference_id
+            or payload.get("new_reference_id") != new_reference_id
+        ):
             return f"unexpected body: {json_detail(response)}"
         return None
 
-    return result_from_response("GET /v1/voices/{voice_id}", response, 200, validate)
+    return result_from_response("POST /v1/references/update", response, 200, validate)
 
 
-async def check_delete_voice(client: httpx.AsyncClient, voice_id: str) -> CheckResult:
+async def check_delete_reference(
+    client: httpx.AsyncClient, reference_id: str
+) -> CheckResult:
     try:
-        response = await client.delete(f"/v1/voices/{voice_id}")
+        response = await client.request(
+            "DELETE",
+            "/v1/references/delete",
+            json={"reference_id": reference_id},
+        )
     except httpx.HTTPError as error:
         return CheckResult(
-            "DELETE /v1/voices/{voice_id}", False, http_error_detail(error)
+            "DELETE /v1/references/delete", False, http_error_detail(error)
         )
-    return result_from_response("DELETE /v1/voices/{voice_id}", response, 204)
+
+    def validate(response: httpx.Response) -> str | None:
+        payload = response.json()
+        if payload.get("success") is not True or payload.get("reference_id") != reference_id:
+            return f"unexpected body: {json_detail(response)}"
+        return None
+
+    return result_from_response("DELETE /v1/references/delete", response, 200, validate)
 
 
-async def cleanup_voice(client: httpx.AsyncClient, voice_id: str) -> None:
+async def cleanup_reference(client: httpx.AsyncClient, reference_id: str) -> None:
     try:
-        await client.delete(f"/v1/voices/{voice_id}")
+        await client.request(
+            "DELETE",
+            "/v1/references/delete",
+            json={"reference_id": reference_id},
+        )
     except httpx.HTTPError:
         pass
 
@@ -442,9 +488,11 @@ async def run_checks(args: argparse.Namespace) -> list[CheckResult]:
     timeout = httpx.Timeout(args.timeout)
     results: list[CheckResult] = []
     selected = args.selected_checks
-    voice_id = f"api_test_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-    voice_created = False
-    needs_voice = bool(selected & VOICE_CHECKS)
+    reference_id = f"api_test_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    updated_reference_id = f"{reference_id}_updated"
+    active_reference_id = reference_id
+    reference_created = False
+    needs_reference = bool(selected & REFERENCE_CHECKS)
 
     async with httpx.AsyncClient(
         base_url=args.base_url.rstrip("/"),
@@ -456,24 +504,28 @@ async def run_checks(args: argparse.Namespace) -> list[CheckResult]:
             results.append(await check_health(client))
         if "workers" in selected:
             results.append(await check_workers(client))
-        if "voices-list" in selected:
-            results.append(await check_list_voices(client))
+        if "references-list" in selected:
+            results.append(await check_list_references(client))
 
-        if needs_voice:
-            create_result, voice_created = await create_voice(client, voice_id)
-            if "voices-create" in selected:
+        if needs_reference:
+            create_result, reference_created = await add_reference(client, reference_id)
+            if "references-add" in selected:
                 results.append(create_result)
 
-        if needs_voice and not voice_created:
+        if needs_reference and not reference_created:
             skipped = []
-            if "voices-create" not in selected:
-                skipped.append("POST /v1/voices setup")
-            if "voices-get" in selected:
-                skipped.append("GET /v1/voices/{voice_id}")
-            if "voices-delete" in selected:
-                skipped.append("DELETE /v1/voices/{voice_id}")
+            if "references-add" not in selected:
+                skipped.append("POST /v1/references/add setup")
+            if "references-update" in selected:
+                skipped.append("POST /v1/references/update")
+            if "references-delete" in selected:
+                skipped.append("DELETE /v1/references/delete")
             results.extend(
-                CheckResult(name, False, "skipped because POST /v1/voices setup failed")
+                CheckResult(
+                    name,
+                    False,
+                    "skipped because POST /v1/references/add setup failed",
+                )
                 for name in skipped
             )
             if "audio-speech" in selected:
@@ -490,9 +542,15 @@ async def run_checks(args: argparse.Namespace) -> list[CheckResult]:
                 )
         else:
             try:
-                voice_ref = voice_id if voice_created else args.voice_id
-                if "voices-get" in selected:
-                    results.append(await check_get_voice(client, voice_id))
+                if "references-update" in selected and reference_created:
+                    results.append(
+                        await check_update_reference(
+                            client, reference_id, updated_reference_id
+                        )
+                    )
+                    if results[-1].ok:
+                        active_reference_id = updated_reference_id
+                voice_ref = active_reference_id if reference_created else args.voice_id
                 if "audio-speech" in selected:
                     results.append(
                         await check_audio_speech(
@@ -506,11 +564,15 @@ async def run_checks(args: argparse.Namespace) -> list[CheckResult]:
                         )
                     )
             finally:
-                if "voices-delete" in selected and voice_created:
-                    results.append(await check_delete_voice(client, voice_id))
+                if "references-delete" in selected and reference_created:
+                    results.append(await check_delete_reference(client, active_reference_id))
+                    if results[-1].ok:
+                        reference_created = False
 
-        if voice_created:
-            await cleanup_voice(client, voice_id)
+        if reference_created:
+            await cleanup_reference(client, active_reference_id)
+            if active_reference_id != reference_id:
+                await cleanup_reference(client, reference_id)
 
     if "worker-ws" in selected:
         results.append(
@@ -579,8 +641,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--voice-id",
-        default=os.getenv("FISH_MANAGER_CHECK_VOICE_ID", "leijun"),
-        help="existing voice ID for speech checks when not creating a temporary voice, default: leijun",
+        "--reference-id",
+        dest="voice_id",
+        metavar="REFERENCE_ID",
+        default=os.getenv(
+            "FISH_MANAGER_CHECK_REFERENCE_ID",
+            os.getenv("FISH_MANAGER_CHECK_VOICE_ID", "leijun"),
+        ),
+        help="existing voice/reference ID for speech checks when not creating a temporary reference, default: leijun",
     )
     parser.add_argument(
         "--audio-dir",
@@ -595,8 +663,9 @@ def parse_args() -> argparse.Namespace:
         metavar="CHECK",
         help=(
             "run only selected checks; repeat or comma-separate values. "
-            "Common values: health, workers, voices, voices-list, voices-create, "
-            "voices-get, voices-delete, speech, audio-speech, tts, worker-ws, public, all"
+            "Common values: health, workers, references, references-list, references-add, "
+            "references-update, references-delete, speech, audio-speech, tts, worker-ws, "
+            "public, all"
         ),
     )
     args = parser.parse_args()

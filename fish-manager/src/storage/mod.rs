@@ -4,7 +4,6 @@ mod sqlite;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -47,6 +46,7 @@ pub trait VoiceMetadataStore: Send + Sync {
     async fn create_voice(&self, voice: VoiceMetadata) -> AppResult<()>;
     async fn get_voice(&self, voice_id: &str) -> AppResult<Option<VoiceMetadata>>;
     async fn list_voices(&self, cursor: Option<String>, limit: u32) -> AppResult<VoicePage>;
+    async fn rename_voice(&self, old_voice_id: &str, new_voice_id: &str) -> AppResult<()>;
     async fn delete_voice(&self, voice_id: &str) -> AppResult<()>;
 }
 
@@ -77,18 +77,15 @@ impl VoiceStore {
         Ok(Self { metadata, blobs })
     }
 
-    pub async fn create_voice(
+    pub async fn create_voice_from_bytes(
         &self,
         voice_id: Option<String>,
         text: String,
-        audio_base64: String,
+        audio: Vec<u8>,
         content_type: Option<String>,
     ) -> AppResult<VoiceMetadata> {
-        let audio = decode_audio_base64(&audio_base64)?;
         if audio.is_empty() {
-            return Err(AppError::BadRequest(
-                "audio_base64 must not be empty".to_string(),
-            ));
+            return Err(AppError::BadRequest("audio must not be empty".to_string()));
         }
 
         let content_type = content_type.unwrap_or_else(|| "audio/wav".to_string());
@@ -123,8 +120,49 @@ impl VoiceStore {
         self.blobs.get_audio(&voice.blob_key).await
     }
 
-    pub async fn list_voices(&self, cursor: Option<String>, limit: u32) -> AppResult<VoicePage> {
-        self.metadata.list_voices(cursor, limit).await
+    pub async fn list_voice_ids(&self) -> AppResult<Vec<String>> {
+        let mut ids = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let page = self.metadata.list_voices(cursor, 100).await?;
+            let has_next_page = page.next_cursor.is_some();
+            ids.extend(page.voices.into_iter().map(|voice| voice.voice_id));
+            if !has_next_page {
+                return Ok(ids);
+            }
+            cursor = ids.last().cloned();
+            if cursor.is_none() {
+                return Ok(ids);
+            }
+        }
+    }
+
+    pub async fn rename_voice(&self, old_voice_id: &str, new_voice_id: &str) -> AppResult<()> {
+        if old_voice_id.trim().is_empty() || new_voice_id.trim().is_empty() {
+            return Err(AppError::BadRequest(
+                "reference_id must not be empty".to_string(),
+            ));
+        }
+
+        if old_voice_id == new_voice_id {
+            return Err(AppError::BadRequest(
+                "new_reference_id must be different from old_reference_id".to_string(),
+            ));
+        }
+
+        if self.metadata.get_voice(old_voice_id).await?.is_none() {
+            return Err(AppError::NotFound(format!(
+                "Reference ID '{old_voice_id}' not found"
+            )));
+        }
+        if self.metadata.get_voice(new_voice_id).await?.is_some() {
+            return Err(AppError::BadRequest(format!(
+                "Reference ID '{new_voice_id}' already exists"
+            )));
+        }
+
+        self.metadata.rename_voice(old_voice_id, new_voice_id).await
     }
 
     pub async fn delete_voice(&self, voice_id: &str) -> AppResult<()> {
@@ -134,17 +172,6 @@ impl VoiceStore {
         }
         Ok(())
     }
-}
-
-fn decode_audio_base64(input: &str) -> AppResult<Vec<u8>> {
-    let payload = input
-        .split_once(',')
-        .map(|(_, payload)| payload)
-        .unwrap_or(input);
-
-    STANDARD
-        .decode(payload)
-        .map_err(|_| AppError::BadRequest("audio_base64 is not valid base64".to_string()))
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {

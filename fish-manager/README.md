@@ -74,10 +74,10 @@ ws://127.0.0.1:8080/internal/workers/ws
 - `GET /v1/workers`
 - `POST /v1/audio/speech`
 - `POST /v1/tts`
-- `POST /v1/voices`
-- `GET /v1/voices`
-- `GET /v1/voices/{voice_id}`
-- `DELETE /v1/voices/{voice_id}`
+- `POST /v1/references/add`
+- `GET /v1/references/list`
+- `DELETE /v1/references/delete`
+- `POST /v1/references/update`
 
 ## API Availability Check
 
@@ -108,11 +108,11 @@ Common `--only` values:
 
 - `health`
 - `workers`
-- `voices`
-- `voices-list`
-- `voices-create`
-- `voices-get`
-- `voices-delete`
+- `references`
+- `references-list`
+- `references-add`
+- `references-update`
+- `references-delete`
 - `speech`
 - `audio-speech`
 - `tts`
@@ -134,18 +134,14 @@ uv run --script scripts/check_apis.py --only speech --require-worker
 
 The script prints response bodies for non-binary responses. Successful `/v1/audio/speech` and `/v1/tts` binary audio responses print only the content type and byte count.
 
-## Create Voice
+## Add Reference
 
 ```bash
-curl -X POST http://127.0.0.1:8080/v1/voices \
+curl -X POST http://127.0.0.1:8080/v1/references/add \
   -H 'Authorization: Bearer sk-live-1' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "voice_id": "speaker_a",
-    "text": "reference transcript",
-    "content_type": "audio/wav",
-    "audio_base64": "..."
-  }'
+  -F 'id=speaker_a' \
+  -F 'text=reference transcript' \
+  -F 'audio=@reference.wav;type=audio/wav'
 ```
 
 ## Synthesize

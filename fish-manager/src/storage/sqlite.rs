@@ -142,6 +142,23 @@ impl VoiceMetadataStore for SqliteMetadataStore {
         })
     }
 
+    async fn rename_voice(&self, old_voice_id: &str, new_voice_id: &str) -> AppResult<()> {
+        sqlx::query("UPDATE voices SET voice_id = ?1 WHERE voice_id = ?2")
+            .bind(new_voice_id)
+            .bind(old_voice_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| {
+                if let sqlx::Error::Database(db_error) = &error {
+                    if db_error.is_unique_violation() {
+                        return AppError::BadRequest("reference_id already exists".to_string());
+                    }
+                }
+                anyhow::Error::from(error).into()
+            })?;
+        Ok(())
+    }
+
     async fn delete_voice(&self, voice_id: &str) -> AppResult<()> {
         sqlx::query("DELETE FROM voices WHERE voice_id = ?1")
             .bind(voice_id)

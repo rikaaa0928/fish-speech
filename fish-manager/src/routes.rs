@@ -3,10 +3,10 @@ use std::{collections::HashSet, sync::atomic::Ordering};
 use async_stream::stream;
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
-    routing::{get, post},
+    response::Response,
+    routing::{delete, get, post},
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -30,8 +30,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/workers", get(list_workers))
         .route("/v1/audio/speech", post(audio_speech))
         .route("/v1/tts", post(fish_tts))
-        .route("/v1/voices", post(create_voice).get(list_voices))
-        .route("/v1/voices/:voice_id", get(get_voice).delete(delete_voice))
+        .route("/v1/references/add", post(add_reference))
+        .route("/v1/references/list", get(list_references))
+        .route("/v1/references/delete", delete(delete_reference))
+        .route("/v1/references/update", post(update_reference))
         .route(
             "/internal/voices/:voice_id/audio",
             get(get_internal_voice_audio),
@@ -58,73 +60,170 @@ async fn list_workers(State(state): State<AppState>, headers: HeaderMap) -> AppR
     Ok(Json(json!({ "data": workers })))
 }
 
-#[derive(Debug, Deserialize)]
-struct CreateVoiceRequest {
-    voice_id: Option<String>,
-    text: String,
-    audio_base64: String,
-    content_type: Option<String>,
-}
-
-async fn create_voice(
+async fn add_reference(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<CreateVoiceRequest>,
+    mut multipart: Multipart,
 ) -> AppResult<Json<Value>> {
     require_openai_auth(&headers, &state.config)?;
-    let voice = state
+
+    let mut id = None;
+    let mut text = None;
+    let mut audio = None;
+    let mut content_type = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| AppError::BadRequest(format!("invalid multipart form: {error}")))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        match name.as_str() {
+            "id" => {
+                id = Some(field.text().await.map_err(|error| {
+                    AppError::BadRequest(format!("invalid reference id field: {error}"))
+                })?);
+            }
+            "text" => {
+                text = Some(field.text().await.map_err(|error| {
+                    AppError::BadRequest(format!("invalid reference text field: {error}"))
+                })?);
+            }
+            "audio" => {
+                content_type = field.content_type().map(ToOwned::to_owned);
+                audio = Some(field.bytes().await.map_err(|error| {
+                    AppError::BadRequest(format!("invalid reference audio field: {error}"))
+                })?);
+            }
+            _ => {}
+        }
+    }
+
+    let id = required_reference_field(id, "id")?;
+    validate_reference_id(&id)?;
+    let text = required_reference_field(text, "text")?;
+    if text.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "Reference text cannot be empty".to_string(),
+        ));
+    }
+    let audio = audio.ok_or_else(|| AppError::BadRequest("audio is required".to_string()))?;
+
+    state
         .voice_store
-        .create_voice(
-            request.voice_id,
-            request.text,
-            request.audio_base64,
-            request.content_type,
-        )
+        .create_voice_from_bytes(Some(id.clone()), text, audio.to_vec(), content_type)
         .await?;
-    Ok(Json(json!(voice)))
+
+    Ok(Json(json!({
+        "success": true,
+        "message": format!("Reference voice '{id}' added successfully"),
+        "reference_id": id,
+    })))
+}
+
+async fn list_references(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<Value>> {
+    require_openai_auth(&headers, &state.config)?;
+    let reference_ids = state.voice_store.list_voice_ids().await?;
+    Ok(Json(json!({
+        "success": true,
+        "reference_ids": reference_ids,
+        "message": format!("Found {} reference voices", reference_ids.len()),
+    })))
 }
 
 #[derive(Debug, Deserialize)]
-struct ListVoicesQuery {
-    cursor: Option<String>,
-    limit: Option<u32>,
+struct DeleteReferenceRequest {
+    reference_id: String,
 }
 
-async fn list_voices(
+async fn delete_reference(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<ListVoicesQuery>,
+    Json(request): Json<DeleteReferenceRequest>,
 ) -> AppResult<Json<Value>> {
     require_openai_auth(&headers, &state.config)?;
-    let page = state
-        .voice_store
-        .list_voices(query.cursor, query.limit.unwrap_or(50))
-        .await?;
-    Ok(Json(json!(page)))
-}
+    validate_reference_id(&request.reference_id)?;
 
-async fn get_voice(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(voice_id): Path<String>,
-) -> AppResult<Json<Value>> {
-    require_openai_auth(&headers, &state.config)?;
-    let voice = state
+    if state
         .voice_store
-        .get_voice(&voice_id)
+        .get_voice(&request.reference_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("voice not found".to_string()))?;
-    Ok(Json(json!(voice)))
+        .is_none()
+    {
+        return Err(AppError::NotFound(format!(
+            "Reference ID '{}' not found",
+            request.reference_id
+        )));
+    }
+
+    state
+        .voice_store
+        .delete_voice(&request.reference_id)
+        .await?;
+    Ok(Json(json!({
+        "success": true,
+        "message": format!("Reference voice '{}' deleted successfully", request.reference_id),
+        "reference_id": request.reference_id,
+    })))
 }
 
-async fn delete_voice(
+#[derive(Debug, Deserialize)]
+struct UpdateReferenceRequest {
+    old_reference_id: String,
+    new_reference_id: String,
+}
+
+async fn update_reference(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(voice_id): Path<String>,
-) -> AppResult<impl IntoResponse> {
+    Json(request): Json<UpdateReferenceRequest>,
+) -> AppResult<Json<Value>> {
     require_openai_auth(&headers, &state.config)?;
-    state.voice_store.delete_voice(&voice_id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    validate_reference_id(&request.old_reference_id)?;
+    validate_reference_id(&request.new_reference_id)?;
+
+    state
+        .voice_store
+        .rename_voice(&request.old_reference_id, &request.new_reference_id)
+        .await?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": format!(
+            "Reference voice renamed from '{}' to '{}' successfully",
+            request.old_reference_id, request.new_reference_id
+        ),
+        "old_reference_id": request.old_reference_id,
+        "new_reference_id": request.new_reference_id,
+    })))
+}
+
+fn required_reference_field(value: Option<String>, name: &str) -> AppResult<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::BadRequest(format!("{name} is required")))
+}
+
+fn validate_reference_id(reference_id: &str) -> AppResult<()> {
+    if reference_id.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "Reference ID cannot be empty".to_string(),
+        ));
+    }
+    if reference_id.len() > 255
+        || !reference_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ' '))
+    {
+        return Err(AppError::BadRequest(
+            "Reference ID contains invalid characters or is too long".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,15 +322,6 @@ struct FishTtsRequest {
     extra: serde_json::Map<String, Value>,
 }
 
-async fn audio_speech(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<AudioSpeechRequest>,
-) -> AppResult<Response> {
-    require_openai_auth(&headers, &state.config)?;
-    handle_speech(state, request, "audio_speech").await
-}
-
 async fn fish_tts(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -249,6 +339,15 @@ async fn fish_tts(
     };
 
     handle_speech(state, mapped, "fish_tts").await
+}
+
+async fn audio_speech(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<AudioSpeechRequest>,
+) -> AppResult<Response> {
+    require_openai_auth(&headers, &state.config)?;
+    handle_speech(state, request, "audio_speech").await
 }
 
 async fn handle_speech(

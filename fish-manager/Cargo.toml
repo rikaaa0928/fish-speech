@@ -7,7 +7,7 @@ edition = "2021"
 anyhow = "1.0"
 async-stream = "0.3"
 async-trait = "0.1"
-axum = { version = "0.7", features = ["macros", "ws"] }
+axum = { version = "0.7", features = ["macros", "multipart", "ws"] }
 base64 = "0.22"
 bytes = { version = "1.7", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
