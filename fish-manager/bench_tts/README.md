@@ -101,6 +101,14 @@ uv run --script fish-manager/bench_tts/tts_bench.py tune-remote \
 
 Accept the configuration when all requests succeed, generated audio files are valid, and no worker-side OOM appears in the remote `fish-worker/run/bench-worker.log`.
 
+## Observed Text Length
+
+The benchmark length targets are character counts, not UTF-8 byte counts. `tts_bench.py` records sample length with Python `len(text)`, so Chinese text is counted as Unicode characters plus punctuation. For UTF-8 byte size, most Chinese characters are about 3 bytes each, so a 465-character Chinese sample is roughly 1395 bytes plus any ASCII or punctuation differences.
+
+With the 24GB default candidate `SGLANG_TTS_MEM_FRACTION_STATIC=0.50` and `SGLANG_TTS_MAX_NEW_TOKENS=1024`, the tested single-request sample range was about 64, 226, and 465 Chinese characters. The mixed benchmark ran these sample sizes twice with one inflight request and all 6 requests succeeded.
+
+Treat about 465 Chinese characters as the current validated single-request reference point for this 24GB setup, not a hard protocol limit. Longer single requests should be tested separately; for production long-form TTS, split text into chunks and concatenate audio instead of raising `SGLANG_TTS_MAX_NEW_TOKENS` indefinitely.
+
 ## Troubleshooting
 
 If the script reports a missing API key, set `OPENAI_API_KEY` or `OPENAI_API_KEYS` in `fish-manager/.env`.

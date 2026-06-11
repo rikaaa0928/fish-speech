@@ -136,6 +136,10 @@ SGLANG_TTS_MAX_NEW_TOKENS=1536
 
 Try `1536` or `2048` only after `1024` is stable. Longer outputs increase decode time roughly with output length and may require more VRAM headroom. On 24GB, test cautiously; long single requests may be better handled by splitting text into chunks.
 
+Text length notes:
+
+The benchmark reports text length as Python `len(text)`, so the values are Unicode character counts, not UTF-8 byte counts. In the 24GB `0.50/1024` validation, sample lengths of about `64`, `226`, and `465` Chinese characters completed successfully with one inflight request. A 465-character Chinese sample is roughly 1395 UTF-8 bytes before accounting for punctuation and ASCII differences. Use this as a validated reference point, not as a hard maximum.
+
 Lower latency for short prompts:
 
 ```bash
