@@ -82,6 +82,22 @@ pub struct InferenceChunk {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceDone {
     pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<InferenceTimings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceTimings {
+    pub total_ms: f64,
+    pub reference_ms: f64,
+    pub sglang_ms: f64,
+    pub chunk_send_ms: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_chunk_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

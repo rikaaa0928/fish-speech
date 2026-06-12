@@ -162,9 +162,9 @@ async fn process_worker_message(state: &AppState, handle: &WorkerHandle, message
             }
         }
         WireMessage::InferenceDone(done) => {
-            let request_id = done.request_id;
+            let request_id = done.request_id.clone();
             if let Some((_, pending)) = state.pending.remove(&request_id) {
-                let _ = pending.tx.send(WorkerEvent::Done).await;
+                let _ = pending.tx.send(WorkerEvent::Done(done)).await;
                 if pending.worker_id == handle.worker_id {
                     handle.manager_inflight.fetch_sub(1, Ordering::Relaxed);
                 }

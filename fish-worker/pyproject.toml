@@ -5,7 +5,6 @@ description = "Outbound GPU worker bridge for fish-manager and SGLang-Omni"
 requires-python = ">=3.10"
 dependencies = [
     "aiohttp>=3.10.0",
-    "huggingface-hub>=0.34.0,<1.0",
     "msgpack>=1.1.0",
     "websockets>=13.0,<16.0",
 ]

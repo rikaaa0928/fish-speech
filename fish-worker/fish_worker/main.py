@@ -22,6 +22,18 @@ import websockets
 from fish_worker import __version__
 
 
+def log(message: str, **fields: Any) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    parts = [timestamp, message]
+    for key, value in fields.items():
+        if isinstance(value, float):
+            rendered = f"{value:.2f}"
+        else:
+            rendered = json.dumps(value, ensure_ascii=True, default=str)
+        parts.append(f"{key}={rendered}")
+    print(" ".join(parts), flush=True)
+
+
 def env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None or value == "":
@@ -123,7 +135,7 @@ class Worker:
                 raise
             except Exception as exc:  # noqa: BLE001
                 self.last_error = str(exc)
-                print(f"worker connection failed: {exc}", flush=True)
+                log("worker connection failed", error=str(exc))
                 await asyncio.sleep(5)
 
     async def start_sglang(self) -> asyncio.subprocess.Process:
@@ -156,22 +168,23 @@ class Worker:
             if extra_args:
                 args.extend(shlex.split(extra_args))
 
-        print(f"starting SGLang: {' '.join(args)}", flush=True)
+        log("starting SGLang", command=" ".join(args))
         return await asyncio.create_subprocess_exec(*args, env=normalized_subprocess_env())
 
     async def wait_sglang_ready(self) -> None:
         deadline = time.monotonic() + env_int("SGLANG_STARTUP_TIMEOUT_SECONDS", 900)
         while time.monotonic() < deadline:
             if await self.sglang_healthy():
-                print("SGLang is healthy", flush=True)
+                log("SGLang is healthy", sglang_url=self.config.sglang_url)
                 return
             await asyncio.sleep(2)
         raise RuntimeError("SGLang did not become healthy before timeout")
 
     async def connect_once(self) -> None:
         url = append_token(self.config.manager_url, self.config.worker_token)
+        log("connecting to manager", manager_url=redact_query_token(self.config.manager_url), worker_id=self.config.worker_id)
         async with websockets.connect(url, max_size=None, ping_interval=20, ping_timeout=20) as ws:
-            print(f"connected to manager as {self.config.worker_id}", flush=True)
+            log("connected to manager", worker_id=self.config.worker_id)
             await send_msg(ws, "worker_hello", self.worker_hello())
 
             heartbeat_task = asyncio.create_task(self.heartbeat_loop(ws))
@@ -184,7 +197,7 @@ class Worker:
                         data = message["data"]
                         asyncio.create_task(self.handle_inference(ws, data))
                     elif message.get("type") == "cancel_request":
-                        print(f"cancel requested: {message.get('data')}", flush=True)
+                        log("cancel requested", data=message.get("data"))
             finally:
                 heartbeat_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -245,40 +258,106 @@ class Worker:
 
     async def handle_inference(self, ws: Any, request: dict[str, Any]) -> None:
         request_id = request["request_id"]
+        api_kind = request.get("api_kind") or "unknown"
         self.local_inflight += 1
         started = time.monotonic()
         temp_files: list[Path] = []
 
         try:
             payload = dict(request.get("payload") or {})
+            input_text = payload.get("input") or ""
             if self.config.sglang_tts_max_new_tokens is not None:
                 payload.setdefault("max_new_tokens", self.config.sglang_tts_max_new_tokens)
             refs = []
-            for index, ref in enumerate(request.get("references") or []):
+            request_references = request.get("references") or []
+            metadata_references = 0
+            inline_references = 0
+            inline_audio_bytes = 0
+            log(
+                "inference request received",
+                request_id=request_id,
+                api_kind=api_kind,
+                stream=bool(request.get("stream")),
+                input_chars=len(input_text),
+                references=len(request_references),
+                inflight=self.local_inflight,
+            )
+            reference_started = time.monotonic()
+            for index, ref in enumerate(request_references):
                 content_type = ref.get("content_type") or "audio/wav"
                 voice_id = ref.get("voice_id")
                 checksum = ref.get("checksum")
                 if voice_id and checksum:
+                    metadata_references += 1
                     path = await self.cached_voice_reference_path(voice_id, checksum, content_type)
                 else:
                     audio_bytes = ref.get("audio_bytes")
                     if audio_bytes is None:
                         raise ValueError("reference must include voice_id/checksum or audio_bytes")
+                    inline_references += 1
+                    inline_audio_bytes += len(audio_bytes)
                     suffix = suffix_for_content_type(content_type)
                     path = self.config.cache_dir / "refs" / f"{request_id}_{index}{suffix}"
                     path.write_bytes(audio_bytes)
                     temp_files.append(path)
                 refs.append({"audio_path": str(path), "text": ref["text"]})
+            reference_ms = (time.monotonic() - reference_started) * 1000
+            log(
+                "inference references prepared",
+                request_id=request_id,
+                api_kind=api_kind,
+                references=len(refs),
+                metadata_references=metadata_references,
+                inline_references=inline_references,
+                inline_audio_bytes=inline_audio_bytes,
+                reference_ms=reference_ms,
+            )
 
             if refs:
                 payload["references"] = refs
             payload["stream"] = bool(request.get("stream"))
 
-            completed = await self.call_sglang(ws, request_id, payload, stream=payload["stream"])
-            if completed:
-                await send_msg(ws, "inference_done", {"request_id": request_id})
+            result = await self.call_sglang(ws, request_id, payload, stream=payload["stream"])
+            if result is not None:
+                total_ms = (time.monotonic() - started) * 1000
+                timings = dict(result["timings"])
+                timings["total_ms"] = total_ms
+                timings["reference_ms"] = reference_ms
+                log(
+                    "inference completed",
+                    request_id=request_id,
+                    api_kind=api_kind,
+                    stream=payload["stream"],
+                    input_chars=len(input_text),
+                    references=len(refs),
+                    metadata_references=metadata_references,
+                    inline_references=inline_references,
+                    audio_bytes=result["audio_bytes"],
+                    chunks=result["chunks"],
+                    total_ms=total_ms,
+                    reference_ms=reference_ms,
+                    sglang_ms=timings["sglang_ms"],
+                    chunk_send_ms=timings["chunk_send_ms"],
+                )
+                await send_msg(
+                    ws,
+                    "inference_done",
+                    {
+                        "request_id": request_id,
+                        "timings": timings,
+                        "audio_bytes": result["audio_bytes"],
+                        "chunks": result["chunks"],
+                    },
+                )
         except Exception as exc:  # noqa: BLE001
             self.last_error = str(exc)
+            log(
+                "inference failed",
+                request_id=request_id,
+                api_kind=api_kind,
+                error=str(exc),
+                total_ms=(time.monotonic() - started) * 1000,
+            )
             await send_error(ws, request_id, "inference_failed", str(exc), retryable=False)
         finally:
             elapsed_ms = (time.monotonic() - started) * 1000
@@ -293,9 +372,17 @@ class Worker:
         voice_dir = self.config.cache_dir / "refs" / "voices" / safe_path_component(voice_id)
         path = voice_dir / f"{safe_path_component(checksum)}{suffix}"
         if path.exists() and path.stat().st_size > 0:
+            log(
+                "voice reference cache hit",
+                voice_id=voice_id,
+                checksum=checksum,
+                content_type=content_type,
+                size_bytes=path.stat().st_size,
+            )
             return path
 
         voice_dir.mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
         audio = await self.download_voice_audio(voice_id, checksum)
         tmp_path = voice_dir / f".{path.name}.{uuid.uuid4().hex}.tmp"
         try:
@@ -304,6 +391,14 @@ class Worker:
         finally:
             with contextlib.suppress(FileNotFoundError):
                 tmp_path.unlink()
+        log(
+            "voice reference cached",
+            voice_id=voice_id,
+            checksum=checksum,
+            content_type=content_type,
+            size_bytes=len(audio),
+            elapsed_ms=(time.monotonic() - started) * 1000,
+        )
         return path
 
     async def download_voice_audio(self, voice_id: str, checksum: str) -> bytes:
@@ -312,13 +407,37 @@ class Worker:
         url = f"{base_url}/internal/voices/{quote(voice_id, safe='')}/audio?{query}"
         headers = {"Authorization": f"Bearer {self.config.worker_token}"}
         async with aiohttp.ClientSession() as session:
+            started = time.monotonic()
             async with session.get(url, headers=headers, timeout=None) as response:
                 if response.status >= 400:
                     text = await response.text()
+                    log(
+                        "voice audio download failed",
+                        voice_id=voice_id,
+                        checksum=checksum,
+                        status=response.status,
+                        elapsed_ms=(time.monotonic() - started) * 1000,
+                    )
                     raise RuntimeError(f"failed to fetch voice {voice_id}: HTTP {response.status}: {text}")
-                return await response.read()
+                audio = await response.read()
+                log(
+                    "voice audio downloaded",
+                    voice_id=voice_id,
+                    checksum=checksum,
+                    status=response.status,
+                    size_bytes=len(audio),
+                    elapsed_ms=(time.monotonic() - started) * 1000,
+                )
+                return audio
 
-    async def call_sglang(self, ws: Any, request_id: str, payload: dict[str, Any], stream: bool) -> bool:
+    async def call_sglang(
+        self, ws: Any, request_id: str, payload: dict[str, Any], stream: bool
+    ) -> dict[str, Any] | None:
+        started = time.monotonic()
+        chunk_send_ms = 0.0
+        first_chunk_ms: float | None = None
+        audio_bytes = 0
+        chunks = 0
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self.config.sglang_url}/v1/audio/speech",
@@ -328,26 +447,75 @@ class Worker:
                 if response.status == 429:
                     self.sglang_reject_count += 1
                     text = await response.text()
+                    log(
+                        "SGLang rejected inference",
+                        request_id=request_id,
+                        status=response.status,
+                        elapsed_ms=(time.monotonic() - started) * 1000,
+                    )
                     await send_error(ws, request_id, "overloaded", text or "SGLang overloaded", retryable=True)
-                    return False
+                    return None
                 if response.status >= 400:
                     text = await response.text()
                     code = "bad_request" if response.status < 500 else "sglang_unavailable"
+                    log(
+                        "SGLang inference failed",
+                        request_id=request_id,
+                        status=response.status,
+                        code=code,
+                        elapsed_ms=(time.monotonic() - started) * 1000,
+                    )
                     await send_error(ws, request_id, code, text, retryable=response.status >= 500)
-                    return False
+                    return None
 
                 content_type = response.headers.get("content-type", "application/octet-stream")
                 if stream:
                     seq = 0
                     async for chunk in response.content.iter_chunked(64 * 1024):
                         if chunk:
+                            if first_chunk_ms is None:
+                                first_chunk_ms = (time.monotonic() - started) * 1000
+                            audio_bytes += len(chunk)
+                            chunks += 1
+                            send_started = time.monotonic()
                             await send_chunk(ws, request_id, seq, content_type, chunk)
+                            chunk_send_ms += (time.monotonic() - send_started) * 1000
                             seq += 1
                 else:
                     body = await response.read()
+                    first_chunk_ms = (time.monotonic() - started) * 1000
+                    audio_bytes = len(body)
+                    chunks = 1 if body else 0
+                    send_started = time.monotonic()
                     await send_chunk(ws, request_id, 0, content_type, body)
+                    chunk_send_ms += (time.monotonic() - send_started) * 1000
 
-                return True
+                total_sglang_ms = (time.monotonic() - started) * 1000
+                upstream_ms = max(0.0, total_sglang_ms - chunk_send_ms)
+                log(
+                    "SGLang inference completed",
+                    request_id=request_id,
+                    stream=stream,
+                    status=response.status,
+                    content_type=content_type,
+                    audio_bytes=audio_bytes,
+                    chunks=chunks,
+                    sglang_ms=upstream_ms,
+                    chunk_send_ms=chunk_send_ms,
+                    first_chunk_ms=first_chunk_ms,
+                )
+                return {
+                    "audio_bytes": audio_bytes,
+                    "chunks": chunks,
+                    "content_type": content_type,
+                    "timings": {
+                        "total_ms": 0.0,
+                        "reference_ms": 0.0,
+                        "sglang_ms": upstream_ms,
+                        "chunk_send_ms": chunk_send_ms,
+                        "first_chunk_ms": first_chunk_ms,
+                    },
+                }
 
     def update_ewma(self, elapsed_ms: float) -> None:
         if self.ewma_latency_ms is None:
@@ -394,6 +562,14 @@ async def send_error(ws: Any, request_id: str, code: str, message: str, retryabl
 def append_token(url: str, token: str) -> str:
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}token={token}"
+
+
+def redact_query_token(url: str) -> str:
+    parts = urlsplit(url)
+    query = "&".join(
+        "token=<redacted>" if item.startswith("token=") else item for item in parts.query.split("&") if item
+    )
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 def manager_http_base_url(manager_url: str) -> str:

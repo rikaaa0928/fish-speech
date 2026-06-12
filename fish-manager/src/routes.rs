@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::atomic::Ordering};
+use std::{collections::HashSet, sync::atomic::Ordering, time::Instant};
 
 use async_stream::stream;
 use axum::{
@@ -237,6 +237,7 @@ async fn get_internal_voice_audio(
     Path(voice_id): Path<String>,
     Query(query): Query<InternalVoiceAudioQuery>,
 ) -> AppResult<Response> {
+    let started = Instant::now();
     require_worker_auth(&headers, &state.config)?;
     tracing::info!(voice_id = %voice_id, checksum = ?query.checksum, "worker requested voice audio");
     let voice = state
@@ -271,6 +272,7 @@ async fn get_internal_voice_audio(
         voice_id = %voice_id,
         checksum = %voice.checksum,
         size_bytes,
+        elapsed_ms = elapsed_ms(started),
         "served voice audio to worker"
     );
     Ok(response)
@@ -356,29 +358,55 @@ async fn handle_speech(
     request: AudioSpeechRequest,
     api_kind: &str,
 ) -> AppResult<Response> {
+    let started = Instant::now();
     if request.input.trim().is_empty() {
         return Err(AppError::BadRequest("input must not be empty".to_string()));
     }
 
     let stream_response = request.stream.unwrap_or(false);
-    let references = resolve_references(&state, &request).await?;
+    let input_chars = request.input.chars().count();
+    let reference_started = Instant::now();
+    let references = match resolve_references(&state, &request).await {
+        Ok(references) => references,
+        Err(error) => {
+            tracing::warn!(
+                api_kind,
+                stream = stream_response,
+                input_chars,
+                total_ms = elapsed_ms(started),
+                manager_reference_ms = elapsed_ms(reference_started),
+                "speech request failed while resolving references"
+            );
+            return Err(error);
+        }
+    };
+    let manager_reference_ms = elapsed_ms(reference_started);
     let reference_summary = reference_summary(&references);
     tracing::info!(
         api_kind,
         stream = stream_response,
-        input_chars = request.input.chars().count(),
+        input_chars,
         references = reference_summary.total,
         metadata_references = reference_summary.metadata,
         inline_references = reference_summary.inline,
         inline_audio_bytes = reference_summary.inline_audio_bytes,
+        manager_reference_ms,
         "accepted speech request"
     );
     let payload = normalized_payload(&request)?;
+    let trace = SpeechTrace {
+        started,
+        api_kind: api_kind.to_string(),
+        input_chars,
+        stream: stream_response,
+        manager_reference_ms,
+        reference_summary,
+    };
 
     if stream_response {
-        stream_inference(state, payload, references, api_kind.to_string()).await
+        stream_inference(state, payload, references, trace).await
     } else {
-        non_streaming_inference(state, payload, references, api_kind.to_string()).await
+        non_streaming_inference(state, payload, references, trace).await
     }
 }
 
@@ -461,20 +489,29 @@ async fn non_streaming_inference(
     state: AppState,
     payload: Value,
     references: Vec<InternalReference>,
-    api_kind: String,
+    trace: SpeechTrace,
 ) -> AppResult<Response> {
     let mut exclude = HashSet::new();
 
     loop {
-        let (worker_id, mut rx) = dispatch_once(
+        let dispatch = dispatch_once(
             &state,
             payload.clone(),
             references.clone(),
             false,
-            api_kind.clone(),
+            trace.api_kind.clone(),
             &mut exclude,
         )
         .await?;
+        let worker_id = dispatch.worker_id.clone();
+        let request_id = dispatch.request_id.clone();
+        let dispatch_timing = DispatchTiming {
+            worker_id: dispatch.worker_id.clone(),
+            request_id: dispatch.request_id.clone(),
+            dispatch_ms: dispatch.dispatch_ms,
+            dispatched_at: dispatch.dispatched_at,
+        };
+        let mut rx = dispatch.rx;
 
         let mut audio = BytesMut::new();
         let mut content_type = "application/octet-stream".to_string();
@@ -486,16 +523,28 @@ async fn non_streaming_inference(
                     content_type = chunk.content_type;
                     audio.extend_from_slice(&chunk.bytes);
                 }
-                WorkerEvent::Done => {
+                WorkerEvent::Done(done) => {
+                    log_speech_completed(
+                        &trace,
+                        &dispatch_timing,
+                        &content_type,
+                        audio.len() as u64,
+                        &done,
+                    );
                     return binary_response(StatusCode::OK, content_type, audio.freeze());
                 }
                 WorkerEvent::Error(error) => {
                     tracing::warn!(
                         worker_id = %worker_id,
                         request_id = %error.request_id,
+                        api_kind = %trace.api_kind,
                         code = %error.code,
                         retryable = error.retryable,
                         message = %error.message,
+                        total_ms = elapsed_ms(trace.started),
+                        manager_reference_ms = trace.manager_reference_ms,
+                        manager_dispatch_ms = dispatch_timing.dispatch_ms,
+                        worker_roundtrip_ms = elapsed_ms(dispatch_timing.dispatched_at),
                         "worker returned non-streaming inference error"
                     );
                     if should_retry(&state, &error, audio.is_empty()) {
@@ -513,6 +562,16 @@ async fn non_streaming_inference(
         }
 
         if audio.is_empty() {
+            tracing::warn!(
+                worker_id = %worker_id,
+                request_id = %request_id,
+                api_kind = %trace.api_kind,
+                total_ms = elapsed_ms(trace.started),
+                manager_reference_ms = trace.manager_reference_ms,
+                manager_dispatch_ms = dispatch_timing.dispatch_ms,
+                worker_roundtrip_ms = elapsed_ms(dispatch_timing.dispatched_at),
+                "worker disconnected before producing audio"
+            );
             exclude.insert(worker_id);
             continue;
         }
@@ -527,39 +586,92 @@ async fn stream_inference(
     state: AppState,
     payload: Value,
     references: Vec<InternalReference>,
-    api_kind: String,
+    trace: SpeechTrace,
 ) -> AppResult<Response> {
     let mut exclude = HashSet::new();
 
     loop {
-        let (worker_id, mut rx) = dispatch_once(
+        let dispatch = dispatch_once(
             &state,
             payload.clone(),
             references.clone(),
             true,
-            api_kind.clone(),
+            trace.api_kind.clone(),
             &mut exclude,
         )
         .await?;
+        let worker_id = dispatch.worker_id.clone();
+        let request_id = dispatch.request_id.clone();
+        let dispatch_timing = DispatchTiming {
+            worker_id: dispatch.worker_id.clone(),
+            request_id: dispatch.request_id.clone(),
+            dispatch_ms: dispatch.dispatch_ms,
+            dispatched_at: dispatch.dispatched_at,
+        };
+        let mut rx = dispatch.rx;
 
         match rx.recv().await {
             Some(WorkerEvent::Chunk(first_chunk)) => {
                 let content_type = first_chunk.content_type;
                 let first_bytes = first_chunk.bytes;
                 let body_worker_id = worker_id.clone();
+                let body_request_id = request_id.clone();
+                let body_content_type = content_type.clone();
+                let body_dispatch = dispatch_timing.clone();
+                let body_trace = trace.clone();
+                tracing::info!(
+                    worker_id = %worker_id,
+                    request_id = %request_id,
+                    api_kind = %trace.api_kind,
+                    first_chunk_bytes = first_bytes.len(),
+                    first_byte_ms = elapsed_ms(dispatch_timing.dispatched_at),
+                    total_ms = elapsed_ms(trace.started),
+                    manager_reference_ms = trace.manager_reference_ms,
+                    manager_dispatch_ms = dispatch_timing.dispatch_ms,
+                    "speech stream response started"
+                );
                 let body_stream = stream! {
+                    let mut streamed_bytes = first_bytes.len() as u64;
+                    let mut streamed_chunks = 1_u64;
                     yield Ok::<Bytes, std::io::Error>(Bytes::from(first_bytes));
                     while let Some(event) = rx.recv().await {
                         match event {
-                            WorkerEvent::Chunk(chunk) => yield Ok::<Bytes, std::io::Error>(Bytes::from(chunk.bytes)),
-                            WorkerEvent::Done => break,
+                            WorkerEvent::Chunk(chunk) => {
+                                streamed_bytes += chunk.bytes.len() as u64;
+                                streamed_chunks += 1;
+                                yield Ok::<Bytes, std::io::Error>(Bytes::from(chunk.bytes));
+                            }
+                            WorkerEvent::Done(done) => {
+                                log_speech_completed(
+                                    &body_trace,
+                                    &body_dispatch,
+                                    &body_content_type,
+                                    streamed_bytes,
+                                    &done,
+                                );
+                                if done.chunks.is_some_and(|chunks| chunks != streamed_chunks) {
+                                    tracing::warn!(
+                                        worker_id = %body_worker_id,
+                                        request_id = %body_request_id,
+                                        streamed_chunks,
+                                        worker_chunks = ?done.chunks,
+                                        "streamed chunk count differed from worker report"
+                                    );
+                                }
+                                break;
+                            }
                             WorkerEvent::Error(error) => {
                                 tracing::warn!(
                                     worker_id = %body_worker_id,
                                     request_id = %error.request_id,
+                                    api_kind = %body_trace.api_kind,
                                     code = %error.code,
                                     retryable = error.retryable,
                                     message = %error.message,
+                                    total_ms = elapsed_ms(body_trace.started),
+                                    manager_reference_ms = body_trace.manager_reference_ms,
+                                    manager_dispatch_ms = body_dispatch.dispatch_ms,
+                                    worker_roundtrip_ms = elapsed_ms(body_dispatch.dispatched_at),
                                     "worker returned streaming inference error after first chunk"
                                 );
                                 yield Err(std::io::Error::new(std::io::ErrorKind::Other, error.message));
@@ -575,7 +687,14 @@ async fn stream_inference(
                     .body(Body::from_stream(body_stream))
                     .map_err(|error| AppError::Internal(anyhow::Error::from(error)));
             }
-            Some(WorkerEvent::Done) => {
+            Some(WorkerEvent::Done(done)) => {
+                log_speech_completed(
+                    &trace,
+                    &dispatch_timing,
+                    "application/octet-stream",
+                    0,
+                    &done,
+                );
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, "application/octet-stream")
@@ -586,9 +705,14 @@ async fn stream_inference(
                 tracing::warn!(
                     worker_id = %worker_id,
                     request_id = %error.request_id,
+                    api_kind = %trace.api_kind,
                     code = %error.code,
                     retryable = error.retryable,
                     message = %error.message,
+                    total_ms = elapsed_ms(trace.started),
+                    manager_reference_ms = trace.manager_reference_ms,
+                    manager_dispatch_ms = dispatch_timing.dispatch_ms,
+                    worker_roundtrip_ms = elapsed_ms(dispatch_timing.dispatched_at),
                     "worker returned streaming inference error"
                 );
                 if should_retry(&state, &error, true) {
@@ -611,8 +735,9 @@ async fn dispatch_once(
     stream: bool,
     api_kind: String,
     exclude: &mut HashSet<String>,
-) -> AppResult<(String, mpsc::Receiver<WorkerEvent>)> {
+) -> AppResult<DispatchResult> {
     loop {
+        let started = Instant::now();
         let worker = state.select_worker(exclude).await?;
         let request_id = format!("req_{}", Uuid::new_v4().simple());
         let (tx, rx) = mpsc::channel(128);
@@ -660,11 +785,86 @@ async fn dispatch_once(
             continue;
         }
 
-        return Ok((worker.worker_id, rx));
+        return Ok(DispatchResult {
+            worker_id: worker.worker_id,
+            request_id,
+            rx,
+            dispatch_ms: elapsed_ms(started),
+            dispatched_at: Instant::now(),
+        });
     }
 }
 
-#[derive(Debug)]
+struct DispatchResult {
+    worker_id: String,
+    request_id: String,
+    rx: mpsc::Receiver<WorkerEvent>,
+    dispatch_ms: f64,
+    dispatched_at: Instant,
+}
+
+#[derive(Clone)]
+struct DispatchTiming {
+    worker_id: String,
+    request_id: String,
+    dispatch_ms: f64,
+    dispatched_at: Instant,
+}
+
+trait DispatchMetrics {
+    fn worker_id(&self) -> &str;
+    fn request_id(&self) -> &str;
+    fn dispatch_ms(&self) -> f64;
+    fn dispatched_at(&self) -> Instant;
+}
+
+impl DispatchMetrics for DispatchResult {
+    fn worker_id(&self) -> &str {
+        &self.worker_id
+    }
+
+    fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    fn dispatch_ms(&self) -> f64 {
+        self.dispatch_ms
+    }
+
+    fn dispatched_at(&self) -> Instant {
+        self.dispatched_at
+    }
+}
+
+impl DispatchMetrics for DispatchTiming {
+    fn worker_id(&self) -> &str {
+        &self.worker_id
+    }
+
+    fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    fn dispatch_ms(&self) -> f64 {
+        self.dispatch_ms
+    }
+
+    fn dispatched_at(&self) -> Instant {
+        self.dispatched_at
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SpeechTrace {
+    started: Instant,
+    api_kind: String,
+    input_chars: usize,
+    stream: bool,
+    manager_reference_ms: f64,
+    reference_summary: ReferenceSummary,
+}
+
+#[derive(Debug, Clone)]
 struct ReferenceSummary {
     total: usize,
     metadata: usize,
@@ -687,6 +887,44 @@ fn reference_summary(references: &[InternalReference]) -> ReferenceSummary {
         inline: references.len().saturating_sub(metadata),
         inline_audio_bytes,
     }
+}
+
+fn log_speech_completed(
+    trace: &SpeechTrace,
+    dispatch: &impl DispatchMetrics,
+    content_type: &str,
+    manager_audio_bytes: u64,
+    done: &crate::protocol::InferenceDone,
+) {
+    tracing::info!(
+        api_kind = %trace.api_kind,
+        request_id = %dispatch.request_id(),
+        worker_id = %dispatch.worker_id(),
+        stream = trace.stream,
+        input_chars = trace.input_chars,
+        references = trace.reference_summary.total,
+        metadata_references = trace.reference_summary.metadata,
+        inline_references = trace.reference_summary.inline,
+        inline_audio_bytes = trace.reference_summary.inline_audio_bytes,
+        content_type,
+        manager_audio_bytes,
+        worker_audio_bytes = ?done.audio_bytes,
+        worker_chunks = ?done.chunks,
+        total_ms = elapsed_ms(trace.started),
+        manager_reference_ms = trace.manager_reference_ms,
+        manager_dispatch_ms = dispatch.dispatch_ms(),
+        worker_roundtrip_ms = elapsed_ms(dispatch.dispatched_at()),
+        worker_total_ms = ?done.timings.as_ref().map(|timing| timing.total_ms),
+        worker_reference_ms = ?done.timings.as_ref().map(|timing| timing.reference_ms),
+        worker_sglang_ms = ?done.timings.as_ref().map(|timing| timing.sglang_ms),
+        worker_chunk_send_ms = ?done.timings.as_ref().map(|timing| timing.chunk_send_ms),
+        worker_first_chunk_ms = ?done.timings.as_ref().and_then(|timing| timing.first_chunk_ms),
+        "speech request completed"
+    );
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 fn should_retry(state: &AppState, error: &InferenceError, no_bytes_sent: bool) -> bool {

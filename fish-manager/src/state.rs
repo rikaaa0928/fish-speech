@@ -124,7 +124,7 @@ impl WorkerStatus {
 #[derive(Debug)]
 pub enum WorkerEvent {
     Chunk(crate::protocol::InferenceChunk),
-    Done,
+    Done(crate::protocol::InferenceDone),
     Error(crate::protocol::InferenceError),
 }
 

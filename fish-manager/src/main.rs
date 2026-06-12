@@ -24,7 +24,10 @@ async fn main() -> anyhow::Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "fish_manager=info,tower_http=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339()),
+        )
         .init();
 
     let config = Arc::new(Config::from_env()?);

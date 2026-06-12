@@ -92,4 +92,4 @@ normalize_thread_env
 bash "${SCRIPT_DIR}/ensure_model.sh"
 prepare_sglang_config
 
-exec uv run fish-worker
+exec fish-worker
