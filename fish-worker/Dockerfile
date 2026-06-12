@@ -5,6 +5,8 @@ ARG UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 ARG UV_HTTP_TIMEOUT=300
 ARG FLASHINFER_VERSION=0.6.1
 ARG FLASHINFER_CUDA_SUFFIX=cu129
+ARG FLASHINFER_HTTP_PROXY
+ARG FLASHINFER_HTTPS_PROXY
 ARG GIT_HTTP_PROXY
 ARG GIT_HTTPS_PROXY
 
@@ -29,7 +31,7 @@ RUN chmod +x scripts/*.sh \
     && printf 'protobuf>=6.31.1,<7.0.0\n' >/tmp/sglang-omni-overrides.txt \
     && UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_INDEX_URL="${UV_INDEX_URL}" uv pip install --no-config --python /app/.venv/bin/python --overrides /tmp/sglang-omni-overrides.txt -v -e /opt/sglang-omni \
     && UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_INDEX_URL="${UV_INDEX_URL}" uv pip install --no-config --python /app/.venv/bin/python --no-deps "flashinfer-python==${FLASHINFER_VERSION}" "flashinfer-cubin==${FLASHINFER_VERSION}" \
-    && UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" uv pip install --no-config --python /app/.venv/bin/python --no-deps --index-url "https://flashinfer.ai/whl/${FLASHINFER_CUDA_SUFFIX}" "flashinfer-jit-cache==${FLASHINFER_VERSION}+${FLASHINFER_CUDA_SUFFIX}" \
+    && HTTPS_PROXY="${FLASHINFER_HTTPS_PROXY:-}" HTTP_PROXY="${FLASHINFER_HTTP_PROXY:-}" UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" uv pip install --no-config --python /app/.venv/bin/python --no-deps --index-url "https://flashinfer.ai/whl/${FLASHINFER_CUDA_SUFFIX}" "flashinfer-jit-cache==${FLASHINFER_VERSION}+${FLASHINFER_CUDA_SUFFIX}" \
     && rm -f /tmp/sglang-omni-overrides.txt
 
 ENV PATH="/app/.venv/bin:${PATH}"
