@@ -97,6 +97,7 @@ filelists/
 *log
 *.log
 site/
+DEPLOYMENT_MEMO.md
 
 # External Tools
 # --------------
