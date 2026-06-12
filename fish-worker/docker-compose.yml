@@ -7,6 +7,8 @@ services:
     gpus: all
     env_file:
       - .env
+    ports:
+      - "9281:${SGLANG_PORT:-8000}"
     volumes:
       - ${HOST_MODEL_DIR:-./models}:${CONTAINER_MODEL_DIR:-/models}
       - ${HOST_CACHE_DIR:-./cache}:${CONTAINER_CACHE_DIR:-/cache}

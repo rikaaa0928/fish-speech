@@ -12,9 +12,11 @@ cp .env.example .env
 docker compose up --build
 ```
 
-By default, Docker Compose mounts `./models:/models` and `./cache:/cache`. Override `HOST_MODEL_DIR`, `HOST_CACHE_DIR`, `CONTAINER_MODEL_DIR`, `CONTAINER_CACHE_DIR`, `MODEL_DIR`, and `CACHE_DIR` in `.env` if your 4090 host uses different storage paths. The container downloads `fishaudio/s2-pro` to `MODEL_DIR` if the model directory is incomplete, generates a S2-Pro config from `configs/s2pro_tts.yaml` with the same 4090D runtime defaults as bare-metal setup, starts SGLang-Omni, waits for health, and connects to the manager.
+By default, Docker Compose mounts `./models:/models` and `./cache:/cache`, starts SGLang-Omni on `0.0.0.0:${SGLANG_PORT:-8000}`, and exposes it on host port `9281`. Override `HOST_MODEL_DIR`, `HOST_CACHE_DIR`, `CONTAINER_MODEL_DIR`, `CONTAINER_CACHE_DIR`, `MODEL_DIR`, and `CACHE_DIR` in `.env` if your 4090 host uses different storage paths. The container downloads `fishaudio/s2-pro` to `MODEL_DIR` if the model directory is incomplete, generates a S2-Pro config from `configs/s2pro_tts.yaml` with the same 4090D runtime defaults as bare-metal setup, starts SGLang-Omni, waits for health, and connects to the manager.
 
 The Docker default is tuned for 24GB GPUs: `SGLANG_TTS_MEM_FRACTION_STATIC=0.50`, `SGLANG_TTS_MAX_NEW_TOKENS=1024`, single SGLang TTS inflight request, no SGLang queue, torch compile off, and CUDA graph off. On 32GB GPUs, raise the settings using the tuning guide below.
+
+The Docker image pins `flashinfer-python`, `flashinfer-cubin`, and `flashinfer-jit-cache` to matching versions to avoid FlashInfer runtime version-check failures. Override `FLASHINFER_VERSION` and `FLASHINFER_CUDA_SUFFIX` at build time only when the base SGLang-Omni image changes CUDA/FlashInfer versions.
 
 ## Run With uv
 
