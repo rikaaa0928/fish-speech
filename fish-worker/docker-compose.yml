@@ -4,7 +4,13 @@ services:
     restart: unless-stopped
     shm_size: "32g"
     ipc: host
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     env_file:
       - .env
     ports:
