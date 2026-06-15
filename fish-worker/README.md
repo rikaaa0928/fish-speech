@@ -16,6 +16,8 @@ By default, Docker Compose mounts `./models:/models` and `./cache:/cache`, start
 
 The Docker default is tuned for 24GB GPUs: `SGLANG_TTS_MEM_FRACTION_STATIC=0.35`, `SGLANG_TTS_MAX_NEW_TOKENS=2048`, `PYTORCH_ALLOC_CONF=expandable_segments:True`, single SGLang TTS inflight request, no SGLang queue, torch compile off, and CUDA graph off. On 32GB GPUs, raise the settings using the tuning guide below.
 
+The intended production path is manager -> worker -> SGLang. In that path the worker fills `max_new_tokens` from `SGLANG_TTS_MAX_NEW_TOKENS` when the request omits it. If you bypass the worker and call SGLang-Omni `/v1/audio/speech` directly, current SGLang-Omni preprocessing treats omitted `max_new_tokens` as `1024`; pass `"max_new_tokens": 2048` explicitly for direct tests that need the 24GB long-output default.
+
 The Docker image pins `flashinfer-python`, `flashinfer-cubin`, and `flashinfer-jit-cache` to matching versions to avoid FlashInfer runtime version-check failures. Override `FLASHINFER_VERSION` and `FLASHINFER_CUDA_SUFFIX` at build time only when the base SGLang-Omni image changes CUDA/FlashInfer versions.
 
 ## Run With uv
@@ -81,7 +83,7 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 - `HFD_THREADS`: download connections, default `8`.
 - `SGLANG_MAX_RUNNING_REQUESTS`: SGLang concurrency limit.
 - `SGLANG_MAX_QUEUED_REQUESTS`: SGLang queue limit.
-- `SGLANG_TTS_MAX_NEW_TOKENS`: S2-Pro TTS engine output-token limit, default `2048`.
+- `SGLANG_TTS_MAX_NEW_TOKENS`: default S2-Pro TTS output-token limit for manager-forwarded worker requests, default `2048`.
 - `PYTORCH_ALLOC_CONF`: PyTorch CUDA allocator setting, default `expandable_segments:True` to reduce long-decode fragmentation.
 - The worker does not keep a separate local admission queue; SGLang is the final overload guard and manager retries another worker on retryable overloads.
 

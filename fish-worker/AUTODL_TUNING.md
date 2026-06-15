@@ -46,7 +46,7 @@ Result:
 
 `SGLANG_TTS_MAX_NEW_TOKENS`
 
-Sets the default S2-Pro output-token limit for worker-forwarded requests and writes `tts_engine.max_new_tokens` into the generated SGLang config. The default is `2048` for 24GB GPUs. Lower values reduce worst-case decode time and help avoid long-request memory pressure. Higher values allow longer audio but increase latency and VRAM/KV-cache pressure. If a client request explicitly includes `max_new_tokens`, that request value wins. If you call SGLang directly, include `"max_new_tokens": N` in the JSON request when you want a per-request cap.
+Sets the default S2-Pro output-token limit for worker-forwarded requests and writes `tts_engine.max_new_tokens` into the generated SGLang config. The default is `2048` for 24GB GPUs. Lower values reduce worst-case decode time and help avoid long-request memory pressure. Higher values allow longer audio but increase latency and VRAM/KV-cache pressure. If a client request explicitly includes `max_new_tokens`, that request value wins. If you bypass the worker and call SGLang-Omni directly, include `"max_new_tokens": N` in the JSON request when you want a per-request cap.
 
 `SGLANG_TTS_MEM_FRACTION_STATIC`
 
@@ -96,7 +96,7 @@ runtime_overrides:
       disable_cuda_graph: true
 ```
 
-S2-Pro's SGLang-Omni stage sets `dtype: "bfloat16"` by default in `sglang_omni/models/fishaudio_s2_pro/stages.py`, so the tested path is already bf16.
+S2-Pro's SGLang-Omni stage sets `dtype: "bfloat16"` by default in `sglang_omni/models/fishaudio_s2_pro/stages.py`, so the tested path is already bf16. Current SGLang-Omni speech preprocessing treats omitted `max_new_tokens` as `1024` for direct `/v1/audio/speech` calls; this does not affect the manager-worker path because the worker fills `max_new_tokens` before forwarding.
 
 ## Tuning Recipes
 
@@ -164,7 +164,7 @@ curl -sS -D run/tts.headers -o run/tts.wav \
 nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader
 ```
 
-For manager/worker end-to-end tests, send the same `max_new_tokens` field through the public request body. The manager preserves extra fields and the worker forwards them to SGLang.
+For manager/worker end-to-end tests, send the same `max_new_tokens` field through the public request body when testing a per-request cap. The manager preserves extra fields and the worker forwards them to SGLang.
 
 ## What To Try If Startup OOMs
 
