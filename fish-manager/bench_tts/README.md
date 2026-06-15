@@ -79,19 +79,22 @@ For each candidate, the script stops stale worker/SGLang processes owned by the 
 The current 24GB default candidate is:
 
 ```bash
-SGLANG_TTS_MEM_FRACTION_STATIC=0.50
+SGLANG_MAX_RUNNING_REQUESTS=1
+SGLANG_MAX_QUEUED_REQUESTS=0
+SGLANG_TTS_MEM_FRACTION_STATIC=0.35
 SGLANG_TTS_MAX_RUNNING_REQUESTS=1
-SGLANG_TTS_MAX_NEW_TOKENS=1024
+SGLANG_TTS_MAX_NEW_TOKENS=2048
 SGLANG_TTS_TORCH_COMPILE=0
 SGLANG_TTS_CUDA_GRAPH=0
+PYTORCH_ALLOC_CONF=expandable_segments:True
 ```
 
 A practical validation pass is:
 
 ```bash
 uv run --script fish-manager/bench_tts/tts_bench.py tune-remote \
-  --mem-fractions 0.50 \
-  --max-new-tokens-values 1024 \
+  --mem-fractions 0.35 \
+  --max-new-tokens-values 2048 \
   --tune-targets 80,240,480 \
   --tune-repeat 2 \
   --ready-timeout 300 \
@@ -105,9 +108,9 @@ Accept the configuration when all requests succeed, generated audio files are va
 
 The benchmark length targets are character counts, not UTF-8 byte counts. `tts_bench.py` records sample length with Python `len(text)`, so Chinese text is counted as Unicode characters plus punctuation. For UTF-8 byte size, most Chinese characters are about 3 bytes each, so a 465-character Chinese sample is roughly 1395 bytes plus any ASCII or punctuation differences.
 
-With the 24GB default candidate `SGLANG_TTS_MEM_FRACTION_STATIC=0.50` and `SGLANG_TTS_MAX_NEW_TOKENS=1024`, the tested single-request sample range was about 64, 226, and 465 Chinese characters. The mixed benchmark ran these sample sizes twice with one inflight request and all 6 requests succeeded.
+With the 24GB default candidate `SGLANG_TTS_MEM_FRACTION_STATIC=0.35` and `SGLANG_TTS_MAX_NEW_TOKENS=2048`, direct SGLang output duration grew through about 478 Chinese characters and plateaued around 543 characters, indicating truncation after the effective limit.
 
-Treat about 465 Chinese characters as the current validated single-request reference point for this 24GB setup, not a hard protocol limit. Longer single requests should be tested separately; for production long-form TTS, split text into chunks and concatenate audio instead of raising `SGLANG_TTS_MAX_NEW_TOKENS` indefinitely.
+Treat about 478 Chinese characters as the current validated single-request reference point for this 24GB setup, not a hard protocol limit. Longer single requests should be tested separately; for production long-form TTS, split text into chunks and concatenate audio instead of raising `SGLANG_TTS_MAX_NEW_TOKENS` indefinitely.
 
 ## Troubleshooting
 

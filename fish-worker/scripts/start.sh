@@ -87,6 +87,30 @@ fi
 if [ -z "${MODEL_DIR+x}" ]; then
   export MODEL_DIR=/models/s2-pro
 fi
+if [ -z "${SGLANG_MAX_RUNNING_REQUESTS+x}" ]; then
+  export SGLANG_MAX_RUNNING_REQUESTS=1
+fi
+if [ -z "${SGLANG_MAX_QUEUED_REQUESTS+x}" ]; then
+  export SGLANG_MAX_QUEUED_REQUESTS=0
+fi
+if [ -z "${SGLANG_TTS_MEM_FRACTION_STATIC+x}" ]; then
+  export SGLANG_TTS_MEM_FRACTION_STATIC=0.35
+fi
+if [ -z "${SGLANG_TTS_MAX_RUNNING_REQUESTS+x}" ]; then
+  export SGLANG_TTS_MAX_RUNNING_REQUESTS=1
+fi
+if [ -z "${SGLANG_TTS_MAX_NEW_TOKENS+x}" ]; then
+  export SGLANG_TTS_MAX_NEW_TOKENS=2048
+fi
+if [ -z "${SGLANG_TTS_TORCH_COMPILE+x}" ]; then
+  export SGLANG_TTS_TORCH_COMPILE=0
+fi
+if [ -z "${SGLANG_TTS_CUDA_GRAPH+x}" ]; then
+  export SGLANG_TTS_CUDA_GRAPH=0
+fi
+if [ -z "${PYTORCH_ALLOC_CONF+x}" ]; then
+  export PYTORCH_ALLOC_CONF=expandable_segments:True
+fi
 normalize_thread_env
 
 bash "${SCRIPT_DIR}/ensure_model.sh"

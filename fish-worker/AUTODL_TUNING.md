@@ -4,21 +4,22 @@ This note records the AutoDL worker settings tested with SGLang-Omni and `fishau
 
 ## Verified Baselines
 
-4090D 24GB, tested 2026-06-11:
+4090D 24GB, tested 2026-06-15:
 
 ```bash
-SGLANG_TTS_MEM_FRACTION_STATIC=0.50
+SGLANG_TTS_MEM_FRACTION_STATIC=0.35
 SGLANG_TTS_MAX_RUNNING_REQUESTS=1
-SGLANG_TTS_MAX_NEW_TOKENS=1024
+SGLANG_TTS_MAX_NEW_TOKENS=2048
 SGLANG_TTS_TORCH_COMPILE=0
 SGLANG_TTS_CUDA_GRAPH=0
+PYTORCH_ALLOC_CONF=expandable_segments:True
 ```
 
 Result:
 
 - SGLang `/health` became ready.
 - Direct `/v1/audio/speech` returned `200 OK` and a valid WAV.
-- Mixed short/medium/long benchmark samples completed successfully with one inflight request.
+- Direct SGLang single-request tests completed successfully through about 478 Chinese characters before output duration plateaued.
 - Runtime versions were `torch 2.9.1+cu128`, `sglang 0.5.8`, `sglang-omni 0.1.0`, `protobuf 6.33.6`.
 
 The 4090D base image used during testing did not provide `python3` on `PATH` and had system PyTorch `2.5.1+cu124`. The setup script handles that by selecting `/root/miniconda3/bin/python` when present and then installing a CUDA 12.8 PyTorch in the worker venv if needed. No manual Python adaptation is expected for that image shape.
@@ -45,11 +46,11 @@ Result:
 
 `SGLANG_TTS_MAX_NEW_TOKENS`
 
-Sets the default S2-Pro output-token limit for worker-forwarded requests and writes `tts_engine.max_new_tokens` into the generated SGLang config. The default is `1024` for 24GB GPUs. Lower values reduce worst-case decode time and help avoid long-request memory pressure. Higher values allow longer audio but increase latency and VRAM/KV-cache pressure. If a client request explicitly includes `max_new_tokens`, that request value wins. If you call SGLang directly, include `"max_new_tokens": N` in the JSON request when you want a per-request cap.
+Sets the default S2-Pro output-token limit for worker-forwarded requests and writes `tts_engine.max_new_tokens` into the generated SGLang config. The default is `2048` for 24GB GPUs. Lower values reduce worst-case decode time and help avoid long-request memory pressure. Higher values allow longer audio but increase latency and VRAM/KV-cache pressure. If a client request explicitly includes `max_new_tokens`, that request value wins. If you call SGLang directly, include `"max_new_tokens": N` in the JSON request when you want a per-request cap.
 
 `SGLANG_TTS_MEM_FRACTION_STATIC`
 
-Controls SGLang's static memory fraction for the S2-Pro TTS engine. The default is `0.50` for 24GB GPUs. This is the main VRAM tuning knob. Higher values give SGLang more room for KV/cache and can support longer outputs or more concurrency, but can OOM during model/vocoder load if too high. Lower values leave more headroom for CUDA libraries, vocoder, fragmentation, and other processes, but may limit long outputs or concurrent requests.
+Controls SGLang's static memory fraction for the S2-Pro TTS engine. The default is `0.35` for 24GB GPUs. This is the main VRAM tuning knob. Higher values give SGLang more room for KV/cache and can support longer outputs or more concurrency, but can OOM during model/vocoder load if too high. Lower values leave more headroom for CUDA libraries, vocoder, fragmentation, and other processes, but may limit long outputs or concurrent requests.
 
 `SGLANG_TTS_MAX_RUNNING_REQUESTS`
 
@@ -87,9 +88,9 @@ model_path: /autodl-fs/data/models/s2-pro
 relay_backend: shm
 runtime_overrides:
   tts_engine:
-    max_new_tokens: 1024
+    max_new_tokens: 2048
     server_args_overrides:
-      mem_fraction_static: 0.50
+      mem_fraction_static: 0.35
       max_running_requests: 1
       enable_torch_compile: false
       disable_cuda_graph: true
@@ -102,11 +103,12 @@ S2-Pro's SGLang-Omni stage sets `dtype: "bfloat16"` by default in `sglang_omni/m
 Default paid-instance startup for 24GB GPUs:
 
 ```bash
-SGLANG_TTS_MEM_FRACTION_STATIC=0.50 \
+SGLANG_TTS_MEM_FRACTION_STATIC=0.35 \
 SGLANG_TTS_MAX_RUNNING_REQUESTS=1 \
-SGLANG_TTS_MAX_NEW_TOKENS=1024 \
+SGLANG_TTS_MAX_NEW_TOKENS=2048 \
 SGLANG_TTS_TORCH_COMPILE=0 \
 SGLANG_TTS_CUDA_GRAPH=0 \
+PYTORCH_ALLOC_CONF=expandable_segments:True \
 bash scripts/autodl_start_worker.sh
 ```
 
@@ -131,14 +133,14 @@ Raise concurrency gradually: `1 -> 2 -> 4`. Keep the advertised SGLang concurren
 Longer generation than the default:
 
 ```bash
-SGLANG_TTS_MAX_NEW_TOKENS=1536
+SGLANG_TTS_MAX_NEW_TOKENS=3072
 ```
 
-Try `1536` or `2048` only after `1024` is stable. Longer outputs increase decode time roughly with output length and may require more VRAM headroom. On 24GB, test cautiously; long single requests may be better handled by splitting text into chunks.
+Try values above `2048` only after the default is stable. Longer outputs increase decode time roughly with output length and may require more VRAM headroom. On 24GB, test cautiously; long single requests may be better handled by splitting text into chunks.
 
 Text length notes:
 
-The benchmark reports text length as Python `len(text)`, so the values are Unicode character counts, not UTF-8 byte counts. In the 24GB `0.50/1024` validation, sample lengths of about `64`, `226`, and `465` Chinese characters completed successfully with one inflight request. A 465-character Chinese sample is roughly 1395 UTF-8 bytes before accounting for punctuation and ASCII differences. Use this as a validated reference point, not as a hard maximum.
+The benchmark reports text length as Python `len(text)`, so the values are Unicode character counts, not UTF-8 byte counts. In the 24GB `0.35/2048` validation, direct SGLang output duration grew through about `478` Chinese characters and plateaued around `543`, indicating truncation after the effective limit. Use this as a validated reference point, not as a hard maximum.
 
 Lower latency for short prompts:
 
@@ -170,8 +172,8 @@ Try these in order:
 
 1. Set `SGLANG_TTS_TORCH_COMPILE=0`.
 2. Set `SGLANG_TTS_CUDA_GRAPH=0`.
-3. Lower `SGLANG_TTS_MEM_FRACTION_STATIC`, for example `0.50 -> 0.45` on 24GB.
-4. Lower `SGLANG_TTS_MAX_NEW_TOKENS`, for example `1024 -> 512`.
+3. Lower `SGLANG_TTS_MEM_FRACTION_STATIC`, for example `0.35 -> 0.32` on 24GB.
+4. Lower `SGLANG_TTS_MAX_NEW_TOKENS`, for example `2048 -> 1024`.
 5. Keep all concurrency at `1` and all queues at `0`.
 6. Check for orphan GPU processes with `nvidia-smi` and stop only stale worker/SGLang processes from the previous run.
 
