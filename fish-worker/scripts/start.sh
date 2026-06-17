@@ -3,8 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${PROJECT_DIR}/.." && pwd)"
 
-cd "${PROJECT_DIR}"
+cd "${REPO_ROOT}"
 
 normalize_thread_env() {
   case "${OMP_NUM_THREADS:-}" in
@@ -12,108 +13,54 @@ normalize_thread_env() {
   esac
 }
 
-prepare_sglang_config() {
-  if [ "${WORKER_MANAGE_SGLANG:-1}" = "0" ] || [ -z "${SGLANG_CONFIG:-}" ] || [ ! -f "${SGLANG_CONFIG}" ]; then
-    return
-  fi
-
-  local model_dir="${MODEL_DIR:-/models/s2-pro}"
-  local generated_dir="${PROJECT_DIR}/.generated"
-  local generated_config="${generated_dir}/$(basename "${SGLANG_CONFIG}")"
-  local source_config
-  local has_model_path=0
-
-  mkdir -p "${generated_dir}"
-  source_config="$(cd "$(dirname "${SGLANG_CONFIG}")" && pwd)/$(basename "${SGLANG_CONFIG}")"
-  generated_config="$(cd "${generated_dir}" && pwd)/$(basename "${SGLANG_CONFIG}")"
-  if [ "${source_config}" = "${generated_config}" ]; then
-    export SGLANG_CONFIG="${generated_config}"
-    return 0
-  fi
-
-  local tmp_config="${generated_config}.tmp.$$"
-  while IFS= read -r line; do
-    case "${line}" in
-      model_path:*)
-        printf 'model_path: %s\n' "${model_dir}"
-        has_model_path=1
-        ;;
-      *)
-        printf '%s\n' "${line}"
-        ;;
-    esac
-  done <"${SGLANG_CONFIG}" >"${tmp_config}"
-
-  if [ "${has_model_path}" = "0" ]; then
-    printf 'model_path: %s\n' "${model_dir}" >>"${tmp_config}"
-  fi
-
-  if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ] || [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ] || [ -n "${SGLANG_TTS_MAX_NEW_TOKENS:-}" ] || [ -n "${SGLANG_TTS_TORCH_COMPILE:-}" ] || [ -n "${SGLANG_TTS_CUDA_GRAPH:-}" ]; then
-    {
-      printf 'runtime_overrides:\n'
-      printf '  tts_engine:\n'
-      if [ -n "${SGLANG_TTS_MAX_NEW_TOKENS:-}" ]; then
-        printf '    max_new_tokens: %s\n' "${SGLANG_TTS_MAX_NEW_TOKENS}"
-      fi
-      if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ] || [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ] || [ -n "${SGLANG_TTS_TORCH_COMPILE:-}" ] || [ -n "${SGLANG_TTS_CUDA_GRAPH:-}" ]; then
-        printf '    server_args_overrides:\n'
-        if [ -n "${SGLANG_TTS_MEM_FRACTION_STATIC:-}" ]; then
-          printf '      mem_fraction_static: %s\n' "${SGLANG_TTS_MEM_FRACTION_STATIC}"
-        fi
-        if [ -n "${SGLANG_TTS_MAX_RUNNING_REQUESTS:-}" ]; then
-          printf '      max_running_requests: %s\n' "${SGLANG_TTS_MAX_RUNNING_REQUESTS}"
-        fi
-        if [ "${SGLANG_TTS_TORCH_COMPILE:-}" = "0" ]; then
-          printf '      enable_torch_compile: false\n'
-        elif [ "${SGLANG_TTS_TORCH_COMPILE:-}" = "1" ]; then
-          printf '      enable_torch_compile: true\n'
-        fi
-        if [ "${SGLANG_TTS_CUDA_GRAPH:-}" = "0" ]; then
-          printf '      disable_cuda_graph: true\n'
-        elif [ "${SGLANG_TTS_CUDA_GRAPH:-}" = "1" ]; then
-          printf '      disable_cuda_graph: false\n'
-        fi
-      fi
-    } >>"${tmp_config}"
-  fi
-
-  mv "${tmp_config}" "${generated_config}"
-  export SGLANG_CONFIG="${generated_config}"
-}
-
-if [ -z "${SGLANG_CONFIG+x}" ]; then
-  export SGLANG_CONFIG=configs/s2pro_tts.yaml
-fi
 if [ -z "${MODEL_DIR+x}" ]; then
   export MODEL_DIR=/models/s2-pro
 fi
-if [ -z "${SGLANG_MAX_RUNNING_REQUESTS+x}" ]; then
-  export SGLANG_MAX_RUNNING_REQUESTS=1
+if [ -z "${API_SERVER_HOST+x}" ]; then
+  export API_SERVER_HOST=0.0.0.0
 fi
-if [ -z "${SGLANG_MAX_QUEUED_REQUESTS+x}" ]; then
-  export SGLANG_MAX_QUEUED_REQUESTS=0
+if [ -z "${API_SERVER_PORT+x}" ]; then
+  export API_SERVER_PORT=8000
 fi
-if [ -z "${SGLANG_TTS_MEM_FRACTION_STATIC+x}" ]; then
-  export SGLANG_TTS_MEM_FRACTION_STATIC=0.35
+if [ -z "${API_SERVER_DECODER_CHECKPOINT_PATH+x}" ]; then
+  export API_SERVER_DECODER_CHECKPOINT_PATH="${MODEL_DIR}/codec.pth"
 fi
-if [ -z "${SGLANG_TTS_MAX_RUNNING_REQUESTS+x}" ]; then
-  export SGLANG_TTS_MAX_RUNNING_REQUESTS=1
+if [ -z "${API_SERVER_DECODER_CONFIG_NAME+x}" ]; then
+  export API_SERVER_DECODER_CONFIG_NAME=modded_dac_vq
 fi
-if [ -z "${SGLANG_TTS_MAX_NEW_TOKENS+x}" ]; then
-  export SGLANG_TTS_MAX_NEW_TOKENS=2048
+if [ -z "${API_SERVER_MAX_RUNNING_REQUESTS+x}" ]; then
+  export API_SERVER_MAX_RUNNING_REQUESTS=1
 fi
-if [ -z "${SGLANG_TTS_TORCH_COMPILE+x}" ]; then
-  export SGLANG_TTS_TORCH_COMPILE=0
+if [ -z "${API_SERVER_MAX_QUEUED_REQUESTS+x}" ]; then
+  export API_SERVER_MAX_QUEUED_REQUESTS=0
 fi
-if [ -z "${SGLANG_TTS_CUDA_GRAPH+x}" ]; then
-  export SGLANG_TTS_CUDA_GRAPH=0
+if [ -z "${API_SERVER_TTS_MAX_NEW_TOKENS+x}" ]; then
+  export API_SERVER_TTS_MAX_NEW_TOKENS=1024
+fi
+if [ -z "${API_SERVER_COMPILE+x}" ]; then
+  export API_SERVER_COMPILE=1
+fi
+if [ -z "${API_SERVER_HALF+x}" ]; then
+  export API_SERVER_HALF=0
+fi
+if [ -z "${API_SERVER_WORKERS+x}" ]; then
+  export API_SERVER_WORKERS=1
+fi
+if [ -z "${API_SERVER_MAX_TEXT_LENGTH+x}" ]; then
+  export API_SERVER_MAX_TEXT_LENGTH=0
+fi
+if [ -z "${API_SERVER_REFERENCES_DIR+x}" ]; then
+  export API_SERVER_REFERENCES_DIR=references
 fi
 if [ -z "${PYTORCH_ALLOC_CONF+x}" ]; then
   export PYTORCH_ALLOC_CONF=expandable_segments:True
 fi
-normalize_thread_env
 
+normalize_thread_env
 bash "${SCRIPT_DIR}/ensure_model.sh"
-prepare_sglang_config
+
+if [ -x "${PROJECT_DIR}/.venv/bin/fish-worker" ]; then
+  exec "${PROJECT_DIR}/.venv/bin/fish-worker"
+fi
 
 exec fish-worker

@@ -4,9 +4,12 @@ import asyncio
 import contextlib
 import json
 import os
+import re
+import shutil
 import signal
 import shlex
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -71,18 +74,28 @@ class Config:
     model_id: str
     model_dir: Path
     cache_dir: Path
-    sglang_host: str
-    sglang_port: int
-    sglang_config: str
-    sglang_max_running_requests: int
-    sglang_max_queued_requests: int
-    sglang_tts_max_new_tokens: int | None
+    api_server_host: str
+    api_server_port: int
+    api_server_url_override: str | None
+    api_server_max_running_requests: int
+    api_server_max_queued_requests: int
+    api_server_tts_max_new_tokens: int | None
+    api_server_decoder_checkpoint_path: Path
+    api_server_decoder_config_name: str
+    api_server_compile: bool
+    api_server_half: bool
+    api_server_workers: int
+    api_server_max_text_length: int
+    api_server_references_dir: Path
     heartbeat_interval_seconds: float
-    manage_sglang: bool
+    manage_api_server: bool
 
     @property
-    def sglang_url(self) -> str:
-        return f"http://{self.sglang_host}:{self.sglang_port}"
+    def api_server_url(self) -> str:
+        if self.api_server_url_override:
+            return self.api_server_url_override.rstrip("/")
+        host = "127.0.0.1" if self.api_server_host in {"0.0.0.0", "::"} else self.api_server_host
+        return f"http://{host}:{self.api_server_port}"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -96,14 +109,24 @@ class Config:
             model_id=os.getenv("MODEL_ID", "fishaudio/s2-pro"),
             model_dir=Path(os.getenv("MODEL_DIR", "/models/s2-pro")),
             cache_dir=Path(os.getenv("CACHE_DIR", "/cache")),
-            sglang_host=os.getenv("SGLANG_HOST", "127.0.0.1"),
-            sglang_port=env_int("SGLANG_PORT", 8000),
-            sglang_config=os.getenv("SGLANG_CONFIG", "configs/s2pro_tts.yaml"),
-            sglang_max_running_requests=env_int("SGLANG_MAX_RUNNING_REQUESTS", 1),
-            sglang_max_queued_requests=env_int("SGLANG_MAX_QUEUED_REQUESTS", 0),
-            sglang_tts_max_new_tokens=env_optional_int("SGLANG_TTS_MAX_NEW_TOKENS"),
+            api_server_host=os.getenv("API_SERVER_HOST", "127.0.0.1"),
+            api_server_port=env_int("API_SERVER_PORT", 8000),
+            api_server_url_override=os.getenv("API_SERVER_URL") or None,
+            api_server_max_running_requests=max(1, env_int("API_SERVER_MAX_RUNNING_REQUESTS", 1)),
+            api_server_max_queued_requests=max(0, env_int("API_SERVER_MAX_QUEUED_REQUESTS", 0)),
+            api_server_tts_max_new_tokens=env_optional_int("API_SERVER_TTS_MAX_NEW_TOKENS"),
+            api_server_decoder_checkpoint_path=Path(
+                os.getenv("API_SERVER_DECODER_CHECKPOINT_PATH")
+                or os.getenv("DECODER_CHECKPOINT_PATH", "/models/s2-pro/codec.pth")
+            ),
+            api_server_decoder_config_name=os.getenv("API_SERVER_DECODER_CONFIG_NAME", "modded_dac_vq"),
+            api_server_compile=env_bool("API_SERVER_COMPILE", True),
+            api_server_half=env_bool("API_SERVER_HALF", False),
+            api_server_workers=max(1, env_int("API_SERVER_WORKERS", 1)),
+            api_server_max_text_length=max(0, env_int("API_SERVER_MAX_TEXT_LENGTH", 0)),
+            api_server_references_dir=Path(os.getenv("API_SERVER_REFERENCES_DIR", "references")),
             heartbeat_interval_seconds=float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "5")),
-            manage_sglang=env_bool("WORKER_MANAGE_SGLANG", True),
+            manage_api_server=env_bool("WORKER_MANAGE_API_SERVER", True),
         )
 
 
@@ -111,22 +134,25 @@ class Worker:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.local_inflight = 0
-        self.sglang_reject_count = 0
+        self.local_queued = 0
+        self.api_server_reject_count = 0
+        self.api_reference_ids: set[str] = set()
+        self.api_reference_locks: dict[str, asyncio.Lock] = {}
+        self.capacity_condition = asyncio.Condition()
         self.ewma_latency_ms: float | None = None
         self.last_error: str | None = None
         self.started_at = datetime.now(timezone.utc)
         self.stop_event = asyncio.Event()
-        self.sglang_process: asyncio.subprocess.Process | None = None
+        self.api_server_process: asyncio.subprocess.Process | None = None
 
     async def run(self) -> None:
         self.config.cache_dir.mkdir(parents=True, exist_ok=True)
-        (self.config.cache_dir / "refs").mkdir(parents=True, exist_ok=True)
-        (self.config.cache_dir / "refs" / "voices").mkdir(parents=True, exist_ok=True)
+        self.config.api_server_references_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.config.manage_sglang:
-            self.sglang_process = await self.start_sglang()
+        if self.config.manage_api_server:
+            self.api_server_process = await self.start_api_server()
 
-        await self.wait_sglang_ready()
+        await self.wait_api_server_ready()
 
         while not self.stop_event.is_set():
             try:
@@ -138,47 +164,47 @@ class Worker:
                 log("worker connection failed", error=str(exc))
                 await asyncio.sleep(5)
 
-    async def start_sglang(self) -> asyncio.subprocess.Process:
-        cmd = os.getenv("SGLANG_COMMAND")
+    async def start_api_server(self) -> asyncio.subprocess.Process:
+        cmd = os.getenv("API_SERVER_COMMAND")
         if cmd:
             args = ["bash", "-lc", cmd]
         else:
             args = [
-                "sgl-omni",
-                "serve",
-                "--model-path",
+                sys.executable,
+                "-m",
+                "tools.api_server",
+                "--listen",
+                f"{self.config.api_server_host}:{self.config.api_server_port}",
+                "--llama-checkpoint-path",
                 str(self.config.model_dir),
-                "--host",
-                self.config.sglang_host,
-                "--port",
-                str(self.config.sglang_port),
+                "--decoder-checkpoint-path",
+                str(self.config.api_server_decoder_checkpoint_path),
+                "--decoder-config-name",
+                self.config.api_server_decoder_config_name,
+                "--workers",
+                str(self.config.api_server_workers),
+                "--max-text-length",
+                str(self.config.api_server_max_text_length),
             ]
-            if self.config.sglang_config:
-                args[4:4] = ["--config", self.config.sglang_config]
-            else:
-                args.extend(
-                    [
-                        "--max-running-requests",
-                        str(self.config.sglang_max_running_requests),
-                        "--max-queued-requests",
-                        str(self.config.sglang_max_queued_requests),
-                    ]
-                )
-            extra_args = os.getenv("SGLANG_EXTRA_ARGS")
+            if self.config.api_server_compile:
+                args.append("--compile")
+            if self.config.api_server_half:
+                args.append("--half")
+            extra_args = os.getenv("API_SERVER_EXTRA_ARGS")
             if extra_args:
                 args.extend(shlex.split(extra_args))
 
-        log("starting SGLang", command=" ".join(args))
+        log("starting Fish API server", command=" ".join(args))
         return await asyncio.create_subprocess_exec(*args, env=normalized_subprocess_env())
 
-    async def wait_sglang_ready(self) -> None:
-        deadline = time.monotonic() + env_int("SGLANG_STARTUP_TIMEOUT_SECONDS", 900)
+    async def wait_api_server_ready(self) -> None:
+        deadline = time.monotonic() + env_int("API_SERVER_STARTUP_TIMEOUT_SECONDS", 900)
         while time.monotonic() < deadline:
-            if await self.sglang_healthy():
-                log("SGLang is healthy", sglang_url=self.config.sglang_url)
+            if await self.api_server_healthy():
+                log("Fish API server is healthy", api_server_url=self.config.api_server_url)
                 return
             await asyncio.sleep(2)
-        raise RuntimeError("SGLang did not become healthy before timeout")
+        raise RuntimeError("Fish API server did not become healthy before timeout")
 
     async def connect_once(self) -> None:
         url = append_token(self.config.manager_url, self.config.worker_token)
@@ -213,17 +239,17 @@ class Worker:
             "gpu_name": gpu.get("gpu_name"),
             "gpu_count": gpu.get("gpu_count", 0),
             "vram_total_mb": gpu.get("vram_total_mb"),
-            "max_running_requests": self.config.sglang_max_running_requests,
-            "max_queued_requests": self.config.sglang_max_queued_requests,
-            "worker_max_inflight": self.config.sglang_max_running_requests,
-            "worker_max_queue": self.config.sglang_max_queued_requests,
-            "sglang_url": self.config.sglang_url,
+            "max_running_requests": self.config.api_server_max_running_requests,
+            "max_queued_requests": self.config.api_server_max_queued_requests,
+            "worker_max_inflight": self.config.api_server_max_running_requests,
+            "worker_max_queue": self.config.api_server_max_queued_requests,
+            "sglang_url": self.config.api_server_url,
             "started_at": self.started_at.isoformat().replace("+00:00", "Z"),
         }
 
     async def heartbeat_loop(self, ws: Any) -> None:
         while True:
-            healthy = await self.sglang_healthy()
+            healthy = await self.api_server_healthy()
             gpu = detect_gpu()
             await send_msg(
                 ws,
@@ -233,9 +259,9 @@ class Worker:
                     "ready": healthy,
                     "sglang_healthy": healthy,
                     "inflight": self.local_inflight,
-                    "queued": 0,
-                    "max_running_requests": self.config.sglang_max_running_requests,
-                    "max_queued_requests": self.config.sglang_max_queued_requests,
+                    "queued": self.local_queued,
+                    "max_running_requests": self.config.api_server_max_running_requests,
+                    "max_queued_requests": self.config.api_server_max_queued_requests,
                     "vram_used_mb": gpu.get("vram_used_mb"),
                     "vram_free_mb": gpu.get("vram_free_mb"),
                     "gpu_utilization_percent": gpu.get("gpu_utilization_percent"),
@@ -245,31 +271,72 @@ class Worker:
             )
             await asyncio.sleep(self.config.heartbeat_interval_seconds)
 
-    async def sglang_healthy(self) -> bool:
+    async def api_server_healthy(self) -> bool:
         async with aiohttp.ClientSession() as session:
-            for path in ("/health", "/v1/models"):
-                try:
-                    async with session.get(f"{self.config.sglang_url}{path}", timeout=3) as response:
-                        if 200 <= response.status < 500:
-                            return True
-                except Exception:  # noqa: BLE001
-                    continue
+            try:
+                async with session.get(f"{self.config.api_server_url}/v1/health", timeout=3) as response:
+                    return 200 <= response.status < 500
+            except Exception:  # noqa: BLE001
+                return False
         return False
+
+    async def acquire_request_slot(self, request_id: str) -> bool:
+        async with self.capacity_condition:
+            if self.local_inflight >= self.config.api_server_max_running_requests:
+                if self.local_queued >= self.config.api_server_max_queued_requests:
+                    self.api_server_reject_count += 1
+                    log(
+                        "worker rejected inference",
+                        request_id=request_id,
+                        reason="overloaded",
+                        inflight=self.local_inflight,
+                        queued=self.local_queued,
+                        max_running=self.config.api_server_max_running_requests,
+                        max_queued=self.config.api_server_max_queued_requests,
+                    )
+                    return False
+                self.local_queued += 1
+                log(
+                    "inference queued",
+                    request_id=request_id,
+                    inflight=self.local_inflight,
+                    queued=self.local_queued,
+                )
+                try:
+                    await self.capacity_condition.wait_for(
+                        lambda: self.local_inflight < self.config.api_server_max_running_requests
+                        or self.stop_event.is_set()
+                    )
+                finally:
+                    self.local_queued -= 1
+                if self.stop_event.is_set():
+                    return False
+
+            self.local_inflight += 1
+            return True
+
+    async def release_request_slot(self) -> None:
+        async with self.capacity_condition:
+            self.local_inflight = max(0, self.local_inflight - 1)
+            self.capacity_condition.notify(1)
 
     async def handle_inference(self, ws: Any, request: dict[str, Any]) -> None:
         request_id = request["request_id"]
         api_kind = request.get("api_kind") or "unknown"
-        self.local_inflight += 1
         started = time.monotonic()
-        temp_files: list[Path] = []
+        slot_acquired = await self.acquire_request_slot(request_id)
+        if not slot_acquired:
+            await send_error(ws, request_id, "overloaded", "worker overloaded", retryable=True)
+            return
 
         try:
-            payload = dict(request.get("payload") or {})
-            input_text = payload.get("input") or ""
-            if self.config.sglang_tts_max_new_tokens is not None:
-                payload.setdefault("max_new_tokens", self.config.sglang_tts_max_new_tokens)
+            payload = api_server_payload(dict(request.get("payload") or {}), stream=bool(request.get("stream")))
+            input_text = payload.get("text") or ""
+            if self.config.api_server_tts_max_new_tokens is not None:
+                payload.setdefault("max_new_tokens", self.config.api_server_tts_max_new_tokens)
             refs = []
             request_references = request.get("references") or []
+            api_reference_id: str | None = None
             metadata_references = 0
             inline_references = 0
             inline_audio_bytes = 0
@@ -283,41 +350,46 @@ class Worker:
                 inflight=self.local_inflight,
             )
             reference_started = time.monotonic()
-            for index, ref in enumerate(request_references):
+            stored_references = [ref for ref in request_references if ref.get("voice_id") and ref.get("checksum")]
+            can_use_reference_id = len(stored_references) == 1 and len(request_references) == 1
+            for ref in request_references:
                 content_type = ref.get("content_type") or "audio/wav"
                 voice_id = ref.get("voice_id")
                 checksum = ref.get("checksum")
                 if voice_id and checksum:
                     metadata_references += 1
-                    path = await self.cached_voice_reference_path(voice_id, checksum, content_type)
+                    if can_use_reference_id:
+                        api_reference_id, _ = await self.ensure_api_reference(ref, content_type)
+                        continue
+
+                    _, path = await self.ensure_api_reference(ref, content_type)
+                    audio_bytes = path.read_bytes()
                 else:
                     audio_bytes = ref.get("audio_bytes")
                     if audio_bytes is None:
                         raise ValueError("reference must include voice_id/checksum or audio_bytes")
                     inline_references += 1
                     inline_audio_bytes += len(audio_bytes)
-                    suffix = suffix_for_content_type(content_type)
-                    path = self.config.cache_dir / "refs" / f"{request_id}_{index}{suffix}"
-                    path.write_bytes(audio_bytes)
-                    temp_files.append(path)
-                refs.append({"audio_path": str(path), "text": ref["text"]})
+                refs.append({"audio": audio_bytes, "text": ref["text"]})
             reference_ms = (time.monotonic() - reference_started) * 1000
             log(
                 "inference references prepared",
                 request_id=request_id,
                 api_kind=api_kind,
-                references=len(refs),
+                references=len(refs) + (1 if api_reference_id else 0),
                 metadata_references=metadata_references,
                 inline_references=inline_references,
                 inline_audio_bytes=inline_audio_bytes,
+                api_reference_id=api_reference_id,
                 reference_ms=reference_ms,
             )
 
+            if api_reference_id:
+                payload["reference_id"] = api_reference_id
             if refs:
                 payload["references"] = refs
-            payload["stream"] = bool(request.get("stream"))
 
-            result = await self.call_sglang(ws, request_id, payload, stream=payload["stream"])
+            result = await self.call_api_server(ws, request_id, payload, stream=payload["streaming"])
             if result is not None:
                 total_ms = (time.monotonic() - started) * 1000
                 timings = dict(result["timings"])
@@ -327,16 +399,17 @@ class Worker:
                     "inference completed",
                     request_id=request_id,
                     api_kind=api_kind,
-                    stream=payload["stream"],
+                    stream=payload["streaming"],
                     input_chars=len(input_text),
-                    references=len(refs),
+                    references=len(refs) + (1 if api_reference_id else 0),
                     metadata_references=metadata_references,
                     inline_references=inline_references,
+                    api_reference_id=api_reference_id,
                     audio_bytes=result["audio_bytes"],
                     chunks=result["chunks"],
                     total_ms=total_ms,
                     reference_ms=reference_ms,
-                    sglang_ms=timings["sglang_ms"],
+                    api_server_ms=timings["api_server_ms"],
                     chunk_send_ms=timings["chunk_send_ms"],
                 )
                 await send_msg(
@@ -349,6 +422,16 @@ class Worker:
                         "chunks": result["chunks"],
                     },
                 )
+        except aiohttp.ClientError as exc:
+            self.last_error = str(exc)
+            log(
+                "api server request failed",
+                request_id=request_id,
+                api_kind=api_kind,
+                error=str(exc),
+                total_ms=(time.monotonic() - started) * 1000,
+            )
+            await send_error(ws, request_id, "sglang_unavailable", str(exc), retryable=True)
         except Exception as exc:  # noqa: BLE001
             self.last_error = str(exc)
             log(
@@ -362,44 +445,7 @@ class Worker:
         finally:
             elapsed_ms = (time.monotonic() - started) * 1000
             self.update_ewma(elapsed_ms)
-            self.local_inflight -= 1
-            for path in temp_files:
-                with contextlib.suppress(FileNotFoundError):
-                    path.unlink()
-
-    async def cached_voice_reference_path(self, voice_id: str, checksum: str, content_type: str) -> Path:
-        suffix = suffix_for_content_type(content_type)
-        voice_dir = self.config.cache_dir / "refs" / "voices" / safe_path_component(voice_id)
-        path = voice_dir / f"{safe_path_component(checksum)}{suffix}"
-        if path.exists() and path.stat().st_size > 0:
-            log(
-                "voice reference cache hit",
-                voice_id=voice_id,
-                checksum=checksum,
-                content_type=content_type,
-                size_bytes=path.stat().st_size,
-            )
-            return path
-
-        voice_dir.mkdir(parents=True, exist_ok=True)
-        started = time.monotonic()
-        audio = await self.download_voice_audio(voice_id, checksum)
-        tmp_path = voice_dir / f".{path.name}.{uuid.uuid4().hex}.tmp"
-        try:
-            tmp_path.write_bytes(audio)
-            tmp_path.replace(path)
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                tmp_path.unlink()
-        log(
-            "voice reference cached",
-            voice_id=voice_id,
-            checksum=checksum,
-            content_type=content_type,
-            size_bytes=len(audio),
-            elapsed_ms=(time.monotonic() - started) * 1000,
-        )
-        return path
+            await self.release_request_slot()
 
     async def download_voice_audio(self, voice_id: str, checksum: str) -> bytes:
         base_url = manager_http_base_url(self.config.manager_url)
@@ -430,7 +476,42 @@ class Worker:
                 )
                 return audio
 
-    async def call_sglang(
+    async def ensure_api_reference(self, ref: dict[str, Any], content_type: str) -> tuple[str, Path]:
+        voice_id = ref["voice_id"]
+        checksum = ref["checksum"]
+        reference_id = api_reference_id_for_voice(voice_id, checksum)
+        existing_path = api_reference_existing_audio_path(self.config.api_server_references_dir, reference_id)
+        if reference_id in self.api_reference_ids and existing_path:
+            return reference_id, existing_path
+
+        lock = self.api_reference_locks.setdefault(reference_id, asyncio.Lock())
+        async with lock:
+            existing_path = api_reference_existing_audio_path(self.config.api_server_references_dir, reference_id)
+            if existing_path:
+                self.api_reference_ids.add(reference_id)
+                return reference_id, existing_path
+
+            started = time.monotonic()
+            audio = await self.download_voice_audio(voice_id, checksum)
+            audio_path = write_api_reference(
+                self.config.api_server_references_dir,
+                reference_id,
+                audio,
+                ref["text"],
+                content_type,
+            )
+            self.api_reference_ids.add(reference_id)
+            log(
+                "API reference written",
+                reference_id=reference_id,
+                voice_id=voice_id,
+                checksum=checksum,
+                size_bytes=len(audio),
+                elapsed_ms=(time.monotonic() - started) * 1000,
+            )
+            return reference_id, audio_path
+
+    async def call_api_server(
         self, ws: Any, request_id: str, payload: dict[str, Any], stream: bool
     ) -> dict[str, Any] | None:
         started = time.monotonic()
@@ -440,26 +521,27 @@ class Worker:
         chunks = 0
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{self.config.sglang_url}/v1/audio/speech",
-                json=payload,
+                f"{self.config.api_server_url}/v1/tts",
+                data=msgpack.packb(payload, use_bin_type=True),
+                headers={"Content-Type": "application/msgpack"},
                 timeout=None,
             ) as response:
                 if response.status == 429:
-                    self.sglang_reject_count += 1
+                    self.api_server_reject_count += 1
                     text = await response.text()
                     log(
-                        "SGLang rejected inference",
+                        "Fish API server rejected inference",
                         request_id=request_id,
                         status=response.status,
                         elapsed_ms=(time.monotonic() - started) * 1000,
                     )
-                    await send_error(ws, request_id, "overloaded", text or "SGLang overloaded", retryable=True)
+                    await send_error(ws, request_id, "overloaded", text or "Fish API server overloaded", retryable=True)
                     return None
                 if response.status >= 400:
                     text = await response.text()
                     code = "bad_request" if response.status < 500 else "sglang_unavailable"
                     log(
-                        "SGLang inference failed",
+                        "Fish API server inference failed",
                         request_id=request_id,
                         status=response.status,
                         code=code,
@@ -490,17 +572,17 @@ class Worker:
                     await send_chunk(ws, request_id, 0, content_type, body)
                     chunk_send_ms += (time.monotonic() - send_started) * 1000
 
-                total_sglang_ms = (time.monotonic() - started) * 1000
-                upstream_ms = max(0.0, total_sglang_ms - chunk_send_ms)
+                total_api_server_ms = (time.monotonic() - started) * 1000
+                upstream_ms = max(0.0, total_api_server_ms - chunk_send_ms)
                 log(
-                    "SGLang inference completed",
+                    "Fish API server inference completed",
                     request_id=request_id,
                     stream=stream,
                     status=response.status,
                     content_type=content_type,
                     audio_bytes=audio_bytes,
                     chunks=chunks,
-                    sglang_ms=upstream_ms,
+                    api_server_ms=upstream_ms,
                     chunk_send_ms=chunk_send_ms,
                     first_chunk_ms=first_chunk_ms,
                 )
@@ -511,6 +593,7 @@ class Worker:
                     "timings": {
                         "total_ms": 0.0,
                         "reference_ms": 0.0,
+                        "api_server_ms": upstream_ms,
                         "sglang_ms": upstream_ms,
                         "chunk_send_ms": chunk_send_ms,
                         "first_chunk_ms": first_chunk_ms,
@@ -582,10 +665,6 @@ def manager_http_base_url(manager_url: str) -> str:
     return urlunsplit((scheme, parts.netloc, path.rstrip("/"), "", ""))
 
 
-def safe_path_component(value: str) -> str:
-    return quote(value, safe="._-")
-
-
 def suffix_for_content_type(content_type: str) -> str:
     return {
         "audio/mpeg": ".mp3",
@@ -595,6 +674,68 @@ def suffix_for_content_type(content_type: str) -> str:
         "audio/wav": ".wav",
         "audio/x-wav": ".wav",
     }.get(content_type, ".wav")
+
+
+def api_reference_existing_audio_path(references_dir: Path, reference_id: str) -> Path | None:
+    ref_dir = references_dir / reference_id
+    if not ref_dir.is_dir():
+        return None
+
+    for audio_path in ref_dir.iterdir():
+        if audio_path.suffix != ".lab" and audio_path.is_file() and audio_path.with_suffix(".lab").is_file():
+            return audio_path
+    return None
+
+
+def write_api_reference(
+    references_dir: Path,
+    reference_id: str,
+    audio: bytes,
+    text: str,
+    content_type: str,
+) -> Path:
+    references_dir.mkdir(parents=True, exist_ok=True)
+    suffix = suffix_for_content_type(content_type)
+    ref_dir = references_dir / reference_id
+    tmp_dir = references_dir / f".{reference_id}.{uuid.uuid4().hex}.tmp"
+    audio_path = ref_dir / f"sample{suffix}"
+    try:
+        tmp_dir.mkdir(parents=True, exist_ok=False)
+        (tmp_dir / f"sample{suffix}").write_bytes(audio)
+        (tmp_dir / "sample.lab").write_text(text, encoding="utf-8")
+        tmp_dir.replace(ref_dir)
+    except FileExistsError:
+        existing_path = api_reference_existing_audio_path(references_dir, reference_id)
+        if existing_path:
+            return existing_path
+        raise
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            shutil.rmtree(tmp_dir)
+    return audio_path
+
+
+def api_server_payload(payload: dict[str, Any], stream: bool) -> dict[str, Any]:
+    api_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"input", "response_format", "stream", "voice"}
+    }
+    api_payload["text"] = payload.get("text") or payload.get("input") or ""
+    response_format = payload.get("format") or payload.get("response_format")
+    if response_format:
+        api_payload["format"] = response_format
+    api_payload["streaming"] = bool(payload.get("streaming", stream))
+    return api_payload
+
+
+def api_reference_id_for_voice(voice_id: str, checksum: str) -> str:
+    safe_voice_id = re.sub(r"[^a-zA-Z0-9\-_ ]+", "_", voice_id).strip(" _-") or "voice"
+    checksum_part = re.sub(r"[^a-zA-Z0-9\-_]+", "", checksum)[:64] or uuid.uuid5(
+        uuid.NAMESPACE_URL, checksum
+    ).hex
+    max_voice_len = max(1, 255 - len(checksum_part) - 1)
+    return f"{safe_voice_id[:max_voice_len]}-{checksum_part}"
 
 
 def detect_gpu() -> dict[str, Any]:
@@ -643,10 +784,10 @@ async def async_main() -> None:
     try:
         await worker.run()
     finally:
-        if worker.sglang_process and worker.sglang_process.returncode is None:
-            worker.sglang_process.terminate()
+        if worker.api_server_process and worker.api_server_process.returncode is None:
+            worker.api_server_process.terminate()
             with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(worker.sglang_process.wait(), timeout=20)
+                await asyncio.wait_for(worker.api_server_process.wait(), timeout=20)
 
 
 def run() -> None:

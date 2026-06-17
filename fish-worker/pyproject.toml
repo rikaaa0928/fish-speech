@@ -1,7 +1,7 @@
 [project]
 name = "fish-worker"
 version = "0.1.0"
-description = "Outbound GPU worker bridge for fish-manager and SGLang-Omni"
+description = "Outbound GPU worker bridge for fish-manager and Fish API server"
 requires-python = ">=3.10"
 dependencies = [
     "aiohttp>=3.10.0",

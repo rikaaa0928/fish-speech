@@ -10,22 +10,10 @@ REPO_REF="${REPO_REF:-}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
-PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://mirror.sjtu.edu.cn/pytorch-wheels/cu128}"
 UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone}"
-TORCH_PACKAGES="${TORCH_PACKAGES:-torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0}"
-INSTALL_TORCH="${INSTALL_TORCH:-skip}"
-INSTALL_SGLANG_OMNI="${INSTALL_SGLANG_OMNI:-1}"
-INSTALL_SGLANG="${INSTALL_SGLANG:-${INSTALL_SGLANG_OMNI}}"
-SGLANG_INSTALL_SPEC="${SGLANG_INSTALL_SPEC:-}"
-INSTALL_FLASHINFER="${INSTALL_FLASHINFER:-0}"
-FLASHINFER_INDEX_URL="${FLASHINFER_INDEX_URL:-https://flashinfer.ai/whl/cu128/torch2.8/}"
+UV_EXTRA="${UV_EXTRA:-cu128}"
 DOWNLOAD_MODEL="${DOWNLOAD_MODEL:-1}"
 OVERWRITE_ENV="${OVERWRITE_ENV:-0}"
-SGLANG_OMNI_REPO="${SGLANG_OMNI_REPO:-https://github.com/sgl-project/sglang-omni.git}"
-SGLANG_OMNI_REF="${SGLANG_OMNI_REF:-main}"
-SGLANG_OMNI_DIR="${SGLANG_OMNI_DIR:-/root/src/sglang-omni}"
-SGLANG_OMNI_UV_OVERRIDES="${SGLANG_OMNI_UV_OVERRIDES:-protobuf>=6.31.1,<7.0.0}"
-SGLANG_OMNI_UV_OVERRIDES_FILE="${SGLANG_OMNI_UV_OVERRIDES_FILE:-}"
 HFD_SCRIPT="${HFD_SCRIPT:-${AUTODL_TMP}/cache/hfd.sh}"
 HFD_URL="${HFD_URL:-https://hf-mirror.com/hfd/hfd.sh}"
 HFD_TOOL="${HFD_TOOL:-aria2c}"
@@ -36,8 +24,27 @@ NETWORK_TURBO_SCRIPT="${NETWORK_TURBO_SCRIPT:-/etc/network_turbo}"
 
 ENV_MANAGER_URL="${MANAGER_URL-}"
 ENV_WORKER_TOKEN="${WORKER_TOKEN-}"
+ENV_WORKER_ID="${WORKER_ID-}"
 ENV_MODEL_DIR="${MODEL_DIR-}"
 ENV_CACHE_DIR="${CACHE_DIR-}"
+ENV_API_SERVER_HOST="${API_SERVER_HOST-}"
+ENV_API_SERVER_PORT="${API_SERVER_PORT-}"
+ENV_API_SERVER_URL="${API_SERVER_URL-}"
+ENV_API_SERVER_DECODER_CHECKPOINT_PATH="${API_SERVER_DECODER_CHECKPOINT_PATH-}"
+ENV_API_SERVER_DECODER_CONFIG_NAME="${API_SERVER_DECODER_CONFIG_NAME-}"
+ENV_API_SERVER_MAX_RUNNING_REQUESTS="${API_SERVER_MAX_RUNNING_REQUESTS-}"
+ENV_API_SERVER_MAX_QUEUED_REQUESTS="${API_SERVER_MAX_QUEUED_REQUESTS-}"
+ENV_API_SERVER_TTS_MAX_NEW_TOKENS="${API_SERVER_TTS_MAX_NEW_TOKENS-}"
+ENV_API_SERVER_COMPILE="${API_SERVER_COMPILE-}"
+ENV_API_SERVER_HALF="${API_SERVER_HALF-}"
+ENV_API_SERVER_WORKERS="${API_SERVER_WORKERS-}"
+ENV_API_SERVER_MAX_TEXT_LENGTH="${API_SERVER_MAX_TEXT_LENGTH-}"
+ENV_API_SERVER_REFERENCES_DIR="${API_SERVER_REFERENCES_DIR-}"
+ENV_API_SERVER_EXTRA_ARGS="${API_SERVER_EXTRA_ARGS-}"
+ENV_API_SERVER_STARTUP_TIMEOUT_SECONDS="${API_SERVER_STARTUP_TIMEOUT_SECONDS-}"
+ENV_WORKER_MANAGE_API_SERVER="${WORKER_MANAGE_API_SERVER-}"
+ENV_PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF-}"
+ENV_HEARTBEAT_INTERVAL_SECONDS="${HEARTBEAT_INTERVAL_SECONDS-}"
 
 log() {
   printf '[autodl-setup] %s\n' "$*" >&2
@@ -99,17 +106,25 @@ install_system_packages() {
   log "installing system packages"
   run_root apt-get update
   run_root apt-get install -y --no-install-recommends \
+    aria2 \
     build-essential \
     ca-certificates \
+    cmake \
     curl \
-    aria2 \
     ffmpeg \
     git \
     git-lfs \
+    libasound-dev \
+    libportaudio2 \
+    libportaudiocpp0 \
     libsndfile1 \
+    libsox-dev \
     libssl-dev \
     pkg-config \
-    python3-pip
+    portaudio19-dev \
+    python3-dev \
+    python3-pip \
+    python3-venv
   git lfs install --skip-repo || true
 }
 
@@ -193,17 +208,6 @@ PY
   PYTHON_BIN="${PYTHON_VERSION}"
 }
 
-generate_secret() {
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 24
-  else
-    "${PYTHON_BIN}" - <<'PY'
-import secrets
-print(secrets.token_hex(24))
-PY
-  fi
-}
-
 load_existing_envs() {
   local worker_env="${1}/fish-worker/.env"
 
@@ -216,14 +220,32 @@ load_existing_envs() {
 
   if [ -n "${ENV_MANAGER_URL}" ]; then MANAGER_URL="${ENV_MANAGER_URL}"; fi
   if [ -n "${ENV_WORKER_TOKEN}" ]; then WORKER_TOKEN="${ENV_WORKER_TOKEN}"; fi
+  if [ -n "${ENV_WORKER_ID}" ]; then WORKER_ID="${ENV_WORKER_ID}"; fi
   if [ -n "${ENV_MODEL_DIR}" ]; then MODEL_DIR="${ENV_MODEL_DIR}"; fi
   if [ -n "${ENV_CACHE_DIR}" ]; then CACHE_DIR="${ENV_CACHE_DIR}"; fi
+  if [ -n "${ENV_API_SERVER_HOST}" ]; then API_SERVER_HOST="${ENV_API_SERVER_HOST}"; fi
+  if [ -n "${ENV_API_SERVER_PORT}" ]; then API_SERVER_PORT="${ENV_API_SERVER_PORT}"; fi
+  if [ -n "${ENV_API_SERVER_URL}" ]; then API_SERVER_URL="${ENV_API_SERVER_URL}"; fi
+  if [ -n "${ENV_API_SERVER_DECODER_CHECKPOINT_PATH}" ]; then API_SERVER_DECODER_CHECKPOINT_PATH="${ENV_API_SERVER_DECODER_CHECKPOINT_PATH}"; fi
+  if [ -n "${ENV_API_SERVER_DECODER_CONFIG_NAME}" ]; then API_SERVER_DECODER_CONFIG_NAME="${ENV_API_SERVER_DECODER_CONFIG_NAME}"; fi
+  if [ -n "${ENV_API_SERVER_MAX_RUNNING_REQUESTS}" ]; then API_SERVER_MAX_RUNNING_REQUESTS="${ENV_API_SERVER_MAX_RUNNING_REQUESTS}"; fi
+  if [ -n "${ENV_API_SERVER_MAX_QUEUED_REQUESTS}" ]; then API_SERVER_MAX_QUEUED_REQUESTS="${ENV_API_SERVER_MAX_QUEUED_REQUESTS}"; fi
+  if [ -n "${ENV_API_SERVER_TTS_MAX_NEW_TOKENS}" ]; then API_SERVER_TTS_MAX_NEW_TOKENS="${ENV_API_SERVER_TTS_MAX_NEW_TOKENS}"; fi
+  if [ -n "${ENV_API_SERVER_COMPILE}" ]; then API_SERVER_COMPILE="${ENV_API_SERVER_COMPILE}"; fi
+  if [ -n "${ENV_API_SERVER_HALF}" ]; then API_SERVER_HALF="${ENV_API_SERVER_HALF}"; fi
+  if [ -n "${ENV_API_SERVER_WORKERS}" ]; then API_SERVER_WORKERS="${ENV_API_SERVER_WORKERS}"; fi
+  if [ -n "${ENV_API_SERVER_MAX_TEXT_LENGTH}" ]; then API_SERVER_MAX_TEXT_LENGTH="${ENV_API_SERVER_MAX_TEXT_LENGTH}"; fi
+  if [ -n "${ENV_API_SERVER_REFERENCES_DIR}" ]; then API_SERVER_REFERENCES_DIR="${ENV_API_SERVER_REFERENCES_DIR}"; fi
+  if [ -n "${ENV_API_SERVER_EXTRA_ARGS}" ]; then API_SERVER_EXTRA_ARGS="${ENV_API_SERVER_EXTRA_ARGS}"; fi
+  if [ -n "${ENV_API_SERVER_STARTUP_TIMEOUT_SECONDS}" ]; then API_SERVER_STARTUP_TIMEOUT_SECONDS="${ENV_API_SERVER_STARTUP_TIMEOUT_SECONDS}"; fi
+  if [ -n "${ENV_WORKER_MANAGE_API_SERVER}" ]; then WORKER_MANAGE_API_SERVER="${ENV_WORKER_MANAGE_API_SERVER}"; fi
+  if [ -n "${ENV_PYTORCH_ALLOC_CONF}" ]; then PYTORCH_ALLOC_CONF="${ENV_PYTORCH_ALLOC_CONF}"; fi
+  if [ -n "${ENV_HEARTBEAT_INTERVAL_SECONDS}" ]; then HEARTBEAT_INTERVAL_SECONDS="${ENV_HEARTBEAT_INTERVAL_SECONDS}"; fi
 }
 
 write_worker_env() {
   local repo_root="$1"
   local env_file="${repo_root}/fish-worker/.env"
-  local default_config="${SGLANG_OMNI_DIR}/examples/configs/s2pro_tts.yaml"
 
   if [ -f "${env_file}" ] && [ "${OVERWRITE_ENV}" != "1" ]; then
     log "keeping existing ${env_file}"
@@ -233,27 +255,30 @@ write_worker_env() {
   WORKER_TOKEN="${WORKER_TOKEN:-replace-me}"
   MANAGER_URL="${MANAGER_URL:-wss://manager.example.com/internal/workers/ws}"
   MODEL_ID="${MODEL_ID:-fishaudio/s2-pro}"
-  MODEL_DIR="${MODEL_DIR:-/autodl-fs/data/models/s2-pro}"
+  MODEL_DIR="${MODEL_DIR:-${AUTODL_FS}/models/s2-pro}"
   CACHE_DIR="${CACHE_DIR:-${AUTODL_TMP}/cache}"
   HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
   MODEL_REQUIRED_FILES="${MODEL_REQUIRED_FILES:-codec.pth model-00001-of-00002.safetensors model-00002-of-00002.safetensors}"
-  SGLANG_HOST="${SGLANG_HOST:-127.0.0.1}"
-  SGLANG_PORT="${SGLANG_PORT:-8000}"
-  SGLANG_CONFIG="${SGLANG_CONFIG:-${default_config}}"
-  SGLANG_MAX_RUNNING_REQUESTS="${SGLANG_MAX_RUNNING_REQUESTS:-1}"
-  SGLANG_MAX_QUEUED_REQUESTS="${SGLANG_MAX_QUEUED_REQUESTS:-0}"
-  SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
-  SGLANG_TTS_MEM_FRACTION_STATIC="${SGLANG_TTS_MEM_FRACTION_STATIC:-0.35}"
-  SGLANG_TTS_MAX_RUNNING_REQUESTS="${SGLANG_TTS_MAX_RUNNING_REQUESTS:-1}"
-  SGLANG_TTS_MAX_NEW_TOKENS="${SGLANG_TTS_MAX_NEW_TOKENS:-2048}"
-  SGLANG_TTS_TORCH_COMPILE="${SGLANG_TTS_TORCH_COMPILE:-0}"
-  SGLANG_TTS_CUDA_GRAPH="${SGLANG_TTS_CUDA_GRAPH:-0}"
+  API_SERVER_HOST="${API_SERVER_HOST:-127.0.0.1}"
+  API_SERVER_PORT="${API_SERVER_PORT:-8000}"
+  API_SERVER_URL="${API_SERVER_URL:-}"
+  API_SERVER_DECODER_CHECKPOINT_PATH="${API_SERVER_DECODER_CHECKPOINT_PATH:-${MODEL_DIR}/codec.pth}"
+  API_SERVER_DECODER_CONFIG_NAME="${API_SERVER_DECODER_CONFIG_NAME:-modded_dac_vq}"
+  API_SERVER_MAX_RUNNING_REQUESTS="${API_SERVER_MAX_RUNNING_REQUESTS:-1}"
+  API_SERVER_MAX_QUEUED_REQUESTS="${API_SERVER_MAX_QUEUED_REQUESTS:-0}"
+  API_SERVER_TTS_MAX_NEW_TOKENS="${API_SERVER_TTS_MAX_NEW_TOKENS:-1024}"
+  API_SERVER_COMPILE="${API_SERVER_COMPILE:-1}"
+  API_SERVER_HALF="${API_SERVER_HALF:-0}"
+  API_SERVER_WORKERS="${API_SERVER_WORKERS:-1}"
+  API_SERVER_MAX_TEXT_LENGTH="${API_SERVER_MAX_TEXT_LENGTH:-0}"
+  API_SERVER_REFERENCES_DIR="${API_SERVER_REFERENCES_DIR:-references}"
+  API_SERVER_EXTRA_ARGS="${API_SERVER_EXTRA_ARGS:-}"
   PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
-  SGLANG_STARTUP_TIMEOUT_SECONDS="${SGLANG_STARTUP_TIMEOUT_SECONDS:-900}"
-  WORKER_MANAGE_SGLANG="${WORKER_MANAGE_SGLANG:-1}"
+  API_SERVER_STARTUP_TIMEOUT_SECONDS="${API_SERVER_STARTUP_TIMEOUT_SECONDS:-900}"
+  WORKER_MANAGE_API_SERVER="${WORKER_MANAGE_API_SERVER:-1}"
   HEARTBEAT_INTERVAL_SECONDS="${HEARTBEAT_INTERVAL_SECONDS:-5}"
 
-  mkdir -p "${MODEL_DIR}" "${CACHE_DIR}"
+  mkdir -p "${MODEL_DIR}" "${CACHE_DIR}" "${API_SERVER_REFERENCES_DIR}"
   umask 077
   {
     printf 'MANAGER_URL=%s\n' "${MANAGER_URL}"
@@ -268,160 +293,35 @@ write_worker_env() {
     printf 'MODEL_DIR=%s\n' "${MODEL_DIR}"
     printf 'MODEL_REQUIRED_FILES=%q\n' "${MODEL_REQUIRED_FILES}"
     printf 'CACHE_DIR=%s\n' "${CACHE_DIR}"
-    printf 'SGLANG_HOST=%s\n' "${SGLANG_HOST}"
-    printf 'SGLANG_PORT=%s\n' "${SGLANG_PORT}"
-    printf 'SGLANG_CONFIG=%s\n' "${SGLANG_CONFIG}"
-    printf 'SGLANG_MAX_RUNNING_REQUESTS=%s\n' "${SGLANG_MAX_RUNNING_REQUESTS}"
-    printf 'SGLANG_MAX_QUEUED_REQUESTS=%s\n' "${SGLANG_MAX_QUEUED_REQUESTS}"
-    printf 'SGLANG_EXTRA_ARGS=%q\n' "${SGLANG_EXTRA_ARGS}"
-    printf 'SGLANG_TTS_MEM_FRACTION_STATIC=%s\n' "${SGLANG_TTS_MEM_FRACTION_STATIC}"
-    printf 'SGLANG_TTS_MAX_RUNNING_REQUESTS=%s\n' "${SGLANG_TTS_MAX_RUNNING_REQUESTS}"
-    printf 'SGLANG_TTS_MAX_NEW_TOKENS=%s\n' "${SGLANG_TTS_MAX_NEW_TOKENS}"
-    printf 'SGLANG_TTS_TORCH_COMPILE=%s\n' "${SGLANG_TTS_TORCH_COMPILE}"
-    printf 'SGLANG_TTS_CUDA_GRAPH=%s\n' "${SGLANG_TTS_CUDA_GRAPH}"
+    printf 'API_SERVER_HOST=%s\n' "${API_SERVER_HOST}"
+    printf 'API_SERVER_PORT=%s\n' "${API_SERVER_PORT}"
+    printf 'API_SERVER_URL=%s\n' "${API_SERVER_URL}"
+    printf 'API_SERVER_DECODER_CHECKPOINT_PATH=%s\n' "${API_SERVER_DECODER_CHECKPOINT_PATH}"
+    printf 'API_SERVER_DECODER_CONFIG_NAME=%s\n' "${API_SERVER_DECODER_CONFIG_NAME}"
+    printf 'API_SERVER_MAX_RUNNING_REQUESTS=%s\n' "${API_SERVER_MAX_RUNNING_REQUESTS}"
+    printf 'API_SERVER_MAX_QUEUED_REQUESTS=%s\n' "${API_SERVER_MAX_QUEUED_REQUESTS}"
+    printf 'API_SERVER_TTS_MAX_NEW_TOKENS=%s\n' "${API_SERVER_TTS_MAX_NEW_TOKENS}"
+    printf 'API_SERVER_COMPILE=%s\n' "${API_SERVER_COMPILE}"
+    printf 'API_SERVER_HALF=%s\n' "${API_SERVER_HALF}"
+    printf 'API_SERVER_WORKERS=%s\n' "${API_SERVER_WORKERS}"
+    printf 'API_SERVER_MAX_TEXT_LENGTH=%s\n' "${API_SERVER_MAX_TEXT_LENGTH}"
+    printf 'API_SERVER_REFERENCES_DIR=%s\n' "${API_SERVER_REFERENCES_DIR}"
+    printf 'API_SERVER_EXTRA_ARGS=%q\n' "${API_SERVER_EXTRA_ARGS}"
     printf 'PYTORCH_ALLOC_CONF=%s\n' "${PYTORCH_ALLOC_CONF}"
-    printf 'SGLANG_STARTUP_TIMEOUT_SECONDS=%s\n' "${SGLANG_STARTUP_TIMEOUT_SECONDS}"
-    printf 'WORKER_MANAGE_SGLANG=%s\n' "${WORKER_MANAGE_SGLANG}"
+    printf 'API_SERVER_STARTUP_TIMEOUT_SECONDS=%s\n' "${API_SERVER_STARTUP_TIMEOUT_SECONDS}"
+    printf 'WORKER_MANAGE_API_SERVER=%s\n' "${WORKER_MANAGE_API_SERVER}"
     printf 'HEARTBEAT_INTERVAL_SECONDS=%s\n' "${HEARTBEAT_INTERVAL_SECONDS}"
   } >"${env_file}"
   log "wrote ${env_file}"
 }
 
 setup_worker_venv() {
-  local worker_dir="$1"
-  log "setting up worker Python environment"
-  cd "${worker_dir}"
-  if [ -x .venv/bin/python ]; then
-    log "reusing existing worker venv"
-  else
-    rm -rf .venv
-    uv venv .venv -p "${PYTHON_BIN}" --system-site-packages
-  fi
-  uv sync --no-dev --inexact
-  uv pip install --python "${worker_dir}/.venv/bin/python" --upgrade pip setuptools wheel packaging ninja
-}
-
-torch_status() {
-  local python_bin="$1"
-  "${python_bin}" - <<'PY'
-try:
-    import torch
-except Exception:
-    print("missing")
-    raise SystemExit(0)
-
-cuda_version = torch.version.cuda or ""
-major_minor = tuple(int(part) for part in torch.__version__.split("+", 1)[0].split(".")[:2])
-ok = major_minor in {(2, 8), (2, 9)} and cuda_version.startswith("12.8")
-if ok and not torch.cuda.is_available():
-    print("ok:cuda-unavailable")
-else:
-    print("ok" if ok else "bad")
-PY
-}
-
-install_torch_if_needed() {
-  local python_bin="$1"
-  local status
-  local status_detail
-
-  if [ "${INSTALL_TORCH}" = "skip" ]; then
-    log "INSTALL_TORCH=skip; skip PyTorch installation and CUDA validation"
-    return 0
-  fi
-
-  status="$(torch_status "${python_bin}")"
-  status_detail="${status#*:}"
-  status="${status%%:*}"
-
-  if [ "${status}" = "ok" ] && [ "${status_detail}" = "cuda-unavailable" ]; then
-    log "warning: PyTorch/CUDA versions are compatible, but torch.cuda.is_available() is false; continuing"
-  fi
-
-  if [ "${INSTALL_TORCH}" = "0" ]; then
-    if [ "${status}" != "ok" ]; then
-      printf 'PyTorch CUDA environment is not compatible and INSTALL_TORCH=0.\n' >&2
-      exit 1
-    fi
-    log "using existing PyTorch CUDA environment"
-    return 0
-  fi
-
-  if [ "${INSTALL_TORCH}" = "1" ] || [ "${status}" != "ok" ]; then
-    log "installing PyTorch CUDA wheels from ${PYTORCH_INDEX_URL}"
-    # shellcheck disable=SC2086
-    uv pip install --python "${python_bin}" --index-url "${PYTORCH_INDEX_URL}" --upgrade --force-reinstall ${TORCH_PACKAGES}
-  else
-    log "reusing compatible PyTorch CUDA environment"
-  fi
-}
-
-install_sglang_omni() {
-  local python_bin="$1"
-  local generated_overrides_file=""
-
-  if [ "${INSTALL_SGLANG}" = "0" ]; then
-    log "INSTALL_SGLANG=0; skip SGLang installation"
-    return 0
-  fi
-
-  if [ "${INSTALL_FLASHINFER}" = "1" ]; then
-    log "installing flashinfer-python from ${FLASHINFER_INDEX_URL}"
-    uv pip install --python "${python_bin}" --index-url "${FLASHINFER_INDEX_URL}" flashinfer-python || \
-      log "warning: flashinfer-python install failed; continuing without it"
-  fi
-
-  if [ -n "${SGLANG_INSTALL_SPEC}" ]; then
-    log "installing ${SGLANG_INSTALL_SPEC}"
-    uv pip install --python "${python_bin}" --upgrade "${SGLANG_INSTALL_SPEC}"
-    return 0
-  fi
-
-  if [ "${INSTALL_SGLANG_OMNI}" = "0" ]; then
-    log "INSTALL_SGLANG_OMNI=0; skip SGLang-Omni installation"
-    return 0
-  fi
-
-  if [ ! -d "${SGLANG_OMNI_DIR}/.git" ]; then
-    mkdir -p "$(dirname "${SGLANG_OMNI_DIR}")"
-    rm -rf "${SGLANG_OMNI_DIR}"
-    local attempt=1
-    while [ "${attempt}" -le "${GIT_RETRY_ATTEMPTS}" ]; do
-      log "cloning SGLang-Omni to ${SGLANG_OMNI_DIR} (attempt ${attempt}/${GIT_RETRY_ATTEMPTS})"
-      if github_accelerated_git -c http.version=HTTP/1.1 clone --depth 1 --filter=blob:none "${SGLANG_OMNI_REPO}" "${SGLANG_OMNI_DIR}"; then
-        break
-      fi
-      rm -rf "${SGLANG_OMNI_DIR}"
-      attempt=$((attempt + 1))
-      sleep 5
-    done
-    if [ ! -d "${SGLANG_OMNI_DIR}/.git" ]; then
-      printf 'Failed to clone SGLang-Omni after %s attempts.\n' "${GIT_RETRY_ATTEMPTS}" >&2
-      exit 1
-    fi
-  fi
-
-  log "checking out SGLang-Omni ${SGLANG_OMNI_REF}"
-  github_accelerated_git -C "${SGLANG_OMNI_DIR}" -c http.version=HTTP/1.1 fetch --depth 1 origin "${SGLANG_OMNI_REF}" || true
-  git -C "${SGLANG_OMNI_DIR}" checkout "${SGLANG_OMNI_REF}"
-  github_accelerated_git -C "${SGLANG_OMNI_DIR}" -c http.version=HTTP/1.1 pull --ff-only || true
-
-  log "installing SGLang-Omni into worker venv"
-  local override_args=()
-  if [ -n "${SGLANG_OMNI_UV_OVERRIDES_FILE}" ]; then
-    override_args=(--overrides "${SGLANG_OMNI_UV_OVERRIDES_FILE}")
-  elif [ -n "${SGLANG_OMNI_UV_OVERRIDES}" ]; then
-    generated_overrides_file="$(mktemp)"
-    printf '%s\n' "${SGLANG_OMNI_UV_OVERRIDES}" >"${generated_overrides_file}"
-    override_args=(--overrides "${generated_overrides_file}")
-  fi
-
-  log "http_proxy=${http_proxy-}"
-  log "https_proxy=${https_proxy-}"
-  uv pip install --no-config --python "${python_bin}" "${override_args[@]}" -v -e "${SGLANG_OMNI_DIR}"
-  if [ -n "${generated_overrides_file}" ]; then
-    rm -f "${generated_overrides_file}"
-  fi
+  local repo_root="$1"
+  local worker_dir="${repo_root}/fish-worker"
+  log "setting up worker Python environment with Fish API server dependencies"
+  cd "${repo_root}"
+  UV_PROJECT_ENVIRONMENT="${worker_dir}/.venv" uv sync --extra "${UV_EXTRA}" --no-dev --inexact -p "${PYTHON_BIN}"
+  uv pip install --python "${worker_dir}/.venv/bin/python" -e "${worker_dir}"
 }
 
 download_model() {
@@ -451,9 +351,7 @@ main() {
   ensure_uv
   ensure_python_bin
   load_existing_envs "${repo_root}"
-  setup_worker_venv "${repo_root}/fish-worker"
-  install_torch_if_needed "${repo_root}/fish-worker/.venv/bin/python"
-  install_sglang_omni "${repo_root}/fish-worker/.venv/bin/python"
+  setup_worker_venv "${repo_root}"
   write_worker_env "${repo_root}"
   download_model "${repo_root}/fish-worker"
 
