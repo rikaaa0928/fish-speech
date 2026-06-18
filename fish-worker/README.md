@@ -72,7 +72,7 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 - `API_SERVER_URL`: optional worker target URL for an external Fish API server. Leave empty when the worker manages the API server.
 - `WORKER_MANAGE_API_SERVER`: set `0` to connect to an external server instead of starting `tools/api_server.py`.
 - `API_SERVER_MAX_RUNNING_REQUESTS`: worker local running request limit. This is enforced before requests reach the API server.
-- `API_SERVER_MAX_QUEUED_REQUESTS`: worker local queue limit. Set `0` to reject overload immediately.
+- `API_SERVER_MAX_QUEUED_REQUESTS`: worker local queue limit, default `1`. Set `0` to reject overload immediately.
 - `API_SERVER_TTS_MAX_NEW_TOKENS`: default output-token limit when a client request omits `max_new_tokens`.
 - `API_SERVER_COMPILE`: starts Fish API server with `--compile`, default `1`.
 - `API_SERVER_HALF`: starts Fish API server with `--half`, default `0`; default bf16 was more stable in testing.

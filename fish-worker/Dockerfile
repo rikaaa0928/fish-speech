@@ -2,8 +2,10 @@ ARG CUDA_VER=12.8.1
 ARG UBUNTU_VER=22.04
 FROM nvidia/cuda:${CUDA_VER}-cudnn-runtime-ubuntu${UBUNTU_VER}
 
+ARG APT_UBUNTU_MIRROR=https://mirrors.aliyun.com/ubuntu
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 ARG UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+ARG UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple
 ARG UV_HTTP_TIMEOUT=300
 ARG UV_EXTRA=cu128
 
@@ -19,6 +21,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     set -eux \
     && rm -f /etc/apt/apt.conf.d/docker-clean \
     && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' >/etc/apt/apt.conf.d/keep-cache \
+    && sed -i -E "s#https?://(archive|security).ubuntu.com/ubuntu#${APT_UBUNTU_MIRROR}#g" /etc/apt/sources.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         aria2 \
@@ -47,16 +50,16 @@ RUN python3 -m pip install --no-cache-dir -i "${PIP_INDEX_URL}" uv
 COPY pyproject.toml uv.lock README.md .project-root ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_INDEX_URL="${UV_INDEX_URL}" \
+    UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_INDEX_URL="${UV_INDEX_URL}" UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX}" \
     uv sync --extra "${UV_EXTRA}" --frozen --no-dev --no-install-project
 
 COPY . .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     chmod +x fish-worker/scripts/*.sh \
-    && UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_INDEX_URL="${UV_INDEX_URL}" \
+    && UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_INDEX_URL="${UV_INDEX_URL}" UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX}" \
        uv sync --extra "${UV_EXTRA}" --frozen --no-dev \
-    && UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_INDEX_URL="${UV_INDEX_URL}" \
+    && UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_INDEX_URL="${UV_INDEX_URL}" UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX}" \
        uv pip install --python /app/.venv/bin/python -e /app/fish-worker
 
 WORKDIR /app/fish-worker

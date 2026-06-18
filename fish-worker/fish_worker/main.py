@@ -113,7 +113,7 @@ class Config:
             api_server_port=env_int("API_SERVER_PORT", 8000),
             api_server_url_override=os.getenv("API_SERVER_URL") or None,
             api_server_max_running_requests=max(1, env_int("API_SERVER_MAX_RUNNING_REQUESTS", 1)),
-            api_server_max_queued_requests=max(0, env_int("API_SERVER_MAX_QUEUED_REQUESTS", 0)),
+            api_server_max_queued_requests=max(0, env_int("API_SERVER_MAX_QUEUED_REQUESTS", 1)),
             api_server_tts_max_new_tokens=env_optional_int("API_SERVER_TTS_MAX_NEW_TOKENS"),
             api_server_decoder_checkpoint_path=Path(
                 os.getenv("API_SERVER_DECODER_CHECKPOINT_PATH")

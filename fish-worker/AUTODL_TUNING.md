@@ -10,7 +10,7 @@ This note records the worker settings tested with Fish API server and `fishaudio
 API_SERVER_COMPILE=1
 API_SERVER_HALF=0
 API_SERVER_MAX_RUNNING_REQUESTS=1
-API_SERVER_MAX_QUEUED_REQUESTS=0
+API_SERVER_MAX_QUEUED_REQUESTS=1
 API_SERVER_TTS_MAX_NEW_TOKENS=1024
 API_SERVER_WORKERS=1
 PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -44,7 +44,7 @@ Controls worker-local running requests. Keep this at `1` on 24GB GPUs unless you
 
 `API_SERVER_MAX_QUEUED_REQUESTS`
 
-Controls worker-local queued requests. Set `0` to reject overload immediately. When the queue is full, the worker returns retryable `overloaded` to the manager.
+Controls worker-local queued requests. The default is `1`. Set `0` to reject overload immediately. When the queue is full, the worker returns retryable `overloaded` to the manager.
 
 `API_SERVER_TTS_MAX_NEW_TOKENS`
 
@@ -74,7 +74,7 @@ Default paid-instance startup for 24GB GPUs:
 API_SERVER_COMPILE=1 \
 API_SERVER_HALF=0 \
 API_SERVER_MAX_RUNNING_REQUESTS=1 \
-API_SERVER_MAX_QUEUED_REQUESTS=0 \
+API_SERVER_MAX_QUEUED_REQUESTS=1 \
 API_SERVER_TTS_MAX_NEW_TOKENS=1024 \
 API_SERVER_WORKERS=1 \
 PYTORCH_ALLOC_CONF=expandable_segments:True \
@@ -121,7 +121,7 @@ Try these in order:
 2. Set `API_SERVER_WORKERS=1`.
 3. Set `API_SERVER_COMPILE=0`.
 4. Lower `API_SERVER_TTS_MAX_NEW_TOKENS`, for example `1024 -> 512`.
-5. Keep `API_SERVER_MAX_RUNNING_REQUESTS=1` and `API_SERVER_MAX_QUEUED_REQUESTS=0`.
+5. Keep `API_SERVER_MAX_RUNNING_REQUESTS=1`; lower `API_SERVER_MAX_QUEUED_REQUESTS` to `0` if overload should be rejected immediately.
 6. Check for orphan GPU processes with `nvidia-smi` and stop only stale worker/API server processes from the previous run.
 
 ## What To Try If Requests Are Slow
