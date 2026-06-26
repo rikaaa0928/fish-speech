@@ -11,6 +11,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::{Bytes, BytesMut};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -24,6 +25,9 @@ use crate::{
     workers::worker_ws_handler,
 };
 
+const TARGET_WORKER_HEADER: &str = "x-fish-worker-id";
+const TARGET_WORKER_HEADER_ALIAS: &str = "x-worker-id";
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -32,7 +36,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/tts", post(fish_tts))
         .route("/v1/references/add", post(add_reference))
         .route("/v1/references/list", get(list_references))
-        .route("/v1/references/delete", delete(delete_reference))
+        .route(
+            "/v1/references/delete",
+            delete(delete_reference).post(delete_reference),
+        )
         .route("/v1/references/update", post(update_reference))
         .route(
             "/internal/voices/:voice_id/audio",
@@ -49,12 +56,38 @@ async fn health() -> Json<Value> {
 async fn list_workers(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Json<Value>> {
     require_openai_auth(&headers, &state.config)?;
 
+    let now = Utc::now();
     let mut workers = Vec::new();
+    let mut available_workers = 0_u32;
+    let mut stale_workers = 0_u32;
     for entry in state.workers.iter() {
         let handle = entry.value().clone();
         let mut status = handle.status.read().await.clone();
         status.manager_inflight = handle.manager_inflight.load(Ordering::Relaxed);
+        status.heartbeat_age_ms = (now - status.last_heartbeat_at).num_milliseconds().max(0);
+        let heartbeat_age_seconds = status.heartbeat_age_ms / 1000;
+        let stale = heartbeat_age_seconds > state.config.worker_heartbeat_stale_after_seconds;
+        if stale {
+            stale_workers += 1;
+        } else if status.ready && status.sglang_healthy {
+            available_workers += 1;
+        }
         workers.push(status);
+    }
+    if available_workers == 0 {
+        tracing::warn!(
+            total_workers = workers.len(),
+            stale_workers,
+            heartbeat_stale_after_seconds = state.config.worker_heartbeat_stale_after_seconds,
+            "workers API returned no available workers"
+        );
+    } else {
+        tracing::debug!(
+            total_workers = workers.len(),
+            available_workers,
+            stale_workers,
+            "workers API listed workers"
+        );
     }
 
     Ok(Json(json!({ "data": workers })))
@@ -331,6 +364,7 @@ async fn fish_tts(
     Json(request): Json<FishTtsRequest>,
 ) -> AppResult<Response> {
     require_openai_auth(&headers, &state.config)?;
+    let target_worker_id = target_worker_id_from_headers(&headers)?;
 
     let mapped = AudioSpeechRequest {
         input: request.text,
@@ -341,7 +375,7 @@ async fn fish_tts(
         extra: request.extra,
     };
 
-    handle_speech(state, mapped, "fish_tts").await
+    handle_speech(state, mapped, "fish_tts", target_worker_id).await
 }
 
 async fn audio_speech(
@@ -350,13 +384,15 @@ async fn audio_speech(
     Json(request): Json<AudioSpeechRequest>,
 ) -> AppResult<Response> {
     require_openai_auth(&headers, &state.config)?;
-    handle_speech(state, request, "audio_speech").await
+    let target_worker_id = target_worker_id_from_headers(&headers)?;
+    handle_speech(state, request, "audio_speech", target_worker_id).await
 }
 
 async fn handle_speech(
     state: AppState,
     request: AudioSpeechRequest,
     api_kind: &str,
+    target_worker_id: Option<String>,
 ) -> AppResult<Response> {
     let started = Instant::now();
     if request.input.trim().is_empty() {
@@ -390,6 +426,7 @@ async fn handle_speech(
         metadata_references = reference_summary.metadata,
         inline_references = reference_summary.inline,
         inline_audio_bytes = reference_summary.inline_audio_bytes,
+        target_worker_id = ?target_worker_id,
         manager_reference_ms,
         "accepted speech request"
     );
@@ -401,6 +438,7 @@ async fn handle_speech(
         stream: stream_response,
         manager_reference_ms,
         reference_summary,
+        target_worker_id,
     };
 
     if stream_response {
@@ -474,6 +512,28 @@ async fn resolve_references(
     Ok(references)
 }
 
+fn target_worker_id_from_headers(headers: &HeaderMap) -> AppResult<Option<String>> {
+    let Some(value) = headers
+        .get(TARGET_WORKER_HEADER)
+        .or_else(|| headers.get(TARGET_WORKER_HEADER_ALIAS))
+    else {
+        return Ok(None);
+    };
+
+    let worker_id = value
+        .to_str()
+        .map_err(|_| AppError::BadRequest("target worker header must be valid UTF-8".to_string()))?
+        .trim()
+        .to_string();
+    if worker_id.is_empty() {
+        return Err(AppError::BadRequest(
+            "target worker header must not be empty".to_string(),
+        ));
+    }
+
+    Ok(Some(worker_id))
+}
+
 fn normalized_payload(request: &AudioSpeechRequest) -> AppResult<Value> {
     let mut payload = serde_json::to_value(request).map_err(anyhow::Error::from)?;
     let object = payload
@@ -500,6 +560,7 @@ async fn non_streaming_inference(
             references.clone(),
             false,
             trace.api_kind.clone(),
+            &trace,
             &mut exclude,
         )
         .await?;
@@ -535,19 +596,19 @@ async fn non_streaming_inference(
                 }
                 WorkerEvent::Error(error) => {
                     tracing::warn!(
-                        worker_id = %worker_id,
-                        request_id = %error.request_id,
-                        api_kind = %trace.api_kind,
-                        code = %error.code,
-                        retryable = error.retryable,
-                        message = %error.message,
-                        total_ms = elapsed_ms(trace.started),
-                        manager_reference_ms = trace.manager_reference_ms,
-                        manager_dispatch_ms = dispatch_timing.dispatch_ms,
-                        worker_roundtrip_ms = elapsed_ms(dispatch_timing.dispatched_at),
-                        "worker returned non-streaming inference error"
+                            worker_id = %worker_id,
+                            request_id = %error.request_id,
+                            api_kind = %trace.api_kind,
+                            code = %error.code,
+                            retryable = error.retryable,
+                            message = %error.message,
+                            total_ms = elapsed_ms(trace.started),
+                            manager_reference_ms = trace.manager_reference_ms,
+                            manager_dispatch_ms = dispatch_timing.dispatch_ms,
+                            worker_roundtrip_ms = elapsed_ms(dispatch_timing.dispatched_at),
+                            "worker returned non-streaming inference error"
                     );
-                    if should_retry(&state, &error, audio.is_empty()) {
+                    if should_retry(&state, &trace, &error, audio.is_empty()) {
                         exclude.insert(worker_id.clone());
                         retry = true;
                         break;
@@ -572,6 +633,11 @@ async fn non_streaming_inference(
                 worker_roundtrip_ms = elapsed_ms(dispatch_timing.dispatched_at),
                 "worker disconnected before producing audio"
             );
+            if trace.target_worker_id.is_some() {
+                return Err(AppError::Upstream(
+                    "selected worker disconnected before producing audio".to_string(),
+                ));
+            }
             exclude.insert(worker_id);
             continue;
         }
@@ -597,6 +663,7 @@ async fn stream_inference(
             references.clone(),
             true,
             trace.api_kind.clone(),
+            &trace,
             &mut exclude,
         )
         .await?;
@@ -715,13 +782,18 @@ async fn stream_inference(
                     worker_roundtrip_ms = elapsed_ms(dispatch_timing.dispatched_at),
                     "worker returned streaming inference error"
                 );
-                if should_retry(&state, &error, true) {
+                if should_retry(&state, &trace, &error, true) {
                     exclude.insert(worker_id);
                     continue;
                 }
                 return Err(error_to_app_error(error));
             }
             None => {
+                if trace.target_worker_id.is_some() {
+                    return Err(AppError::Upstream(
+                        "selected worker disconnected before response completed".to_string(),
+                    ));
+                }
                 exclude.insert(worker_id);
             }
         }
@@ -734,11 +806,16 @@ async fn dispatch_once(
     references: Vec<InternalReference>,
     stream: bool,
     api_kind: String,
+    trace: &SpeechTrace,
     exclude: &mut HashSet<String>,
 ) -> AppResult<DispatchResult> {
     loop {
         let started = Instant::now();
-        let worker = state.select_worker(exclude).await?;
+        let worker = if let Some(worker_id) = &trace.target_worker_id {
+            state.select_worker_by_id(worker_id).await?
+        } else {
+            state.select_worker(exclude).await?
+        };
         let request_id = format!("req_{}", Uuid::new_v4().simple());
         let (tx, rx) = mpsc::channel(128);
 
@@ -746,6 +823,7 @@ async fn dispatch_once(
             request_id.clone(),
             PendingRequest {
                 worker_id: worker.worker_id.clone(),
+                connection_id: worker.connection_id.clone(),
                 tx,
             },
         );
@@ -762,6 +840,7 @@ async fn dispatch_once(
         let reference_summary = reference_summary(&references);
         tracing::info!(
             worker_id = %worker.worker_id,
+            connection_id = %worker.connection_id,
             request_id = %request_id,
             api_kind = %api_kind,
             stream,
@@ -776,11 +855,18 @@ async fn dispatch_once(
         if worker.tx.send(message).await.is_err() {
             tracing::warn!(
                 worker_id = %worker.worker_id,
+                connection_id = %worker.connection_id,
                 request_id = %request_id,
                 "failed to send inference request to worker"
             );
             state.pending.remove(&request_id);
             worker.manager_inflight.fetch_sub(1, Ordering::Relaxed);
+            if trace.target_worker_id.is_some() {
+                return Err(AppError::Upstream(format!(
+                    "selected worker '{}' is unavailable",
+                    worker.worker_id
+                )));
+            }
             exclude.insert(worker.worker_id);
             continue;
         }
@@ -862,6 +948,7 @@ struct SpeechTrace {
     stream: bool,
     manager_reference_ms: f64,
     reference_summary: ReferenceSummary,
+    target_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -927,7 +1014,16 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
-fn should_retry(state: &AppState, error: &InferenceError, no_bytes_sent: bool) -> bool {
+fn should_retry(
+    state: &AppState,
+    trace: &SpeechTrace,
+    error: &InferenceError,
+    no_bytes_sent: bool,
+) -> bool {
+    if trace.target_worker_id.is_some() {
+        return false;
+    }
+
     state.config.retry_on_worker_overload
         && no_bytes_sent
         && error.retryable

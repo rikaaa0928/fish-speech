@@ -131,6 +131,10 @@ Supported request concepts:
 - `stream`: stream response through SSE or raw audio mode.
 - Sampling parameters: `temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_new_tokens`, `seed`.
 
+Optional header:
+
+- `X-Fish-Worker-ID`: pin this request to a connected worker ID. When present, the manager does not fallback to another worker for retryable worker errors or disconnects. `X-Worker-ID` is accepted as a compatibility alias.
+
 ### `POST /v1/tts`
 
 Fish Speech compatibility endpoint.
@@ -158,7 +162,7 @@ Initial manager endpoints:
 
 - `POST /v1/references/add`
 - `GET /v1/references/list`
-- `DELETE /v1/references/delete`
+- `DELETE|POST /v1/references/delete`
 - `POST /v1/references/update`
 
 Reference creation stores:

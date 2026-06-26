@@ -63,6 +63,7 @@ def normalized_subprocess_env() -> dict[str, str]:
     omp_threads = env.get("OMP_NUM_THREADS", "")
     if not omp_threads.isdecimal() or int(omp_threads) < 1:
         env["OMP_NUM_THREADS"] = "1"
+    env.setdefault("FISH_API_SERVER_ACCESS_LOG", "0")
     return env
 
 
@@ -141,6 +142,8 @@ class Worker:
         self.capacity_condition = asyncio.Condition()
         self.ewma_latency_ms: float | None = None
         self.last_error: str | None = None
+        self.last_api_server_healthy: bool | None = None
+        self.last_api_server_health_detail: str | None = None
         self.started_at = datetime.now(timezone.utc)
         self.stop_event = asyncio.Event()
         self.api_server_process: asyncio.subprocess.Process | None = None
@@ -200,11 +203,16 @@ class Worker:
     async def wait_api_server_ready(self) -> None:
         deadline = time.monotonic() + env_int("API_SERVER_STARTUP_TIMEOUT_SECONDS", 900)
         while time.monotonic() < deadline:
-            if await self.api_server_healthy():
+            healthy, detail = await self.api_server_health()
+            if healthy:
                 log("Fish API server is healthy", api_server_url=self.config.api_server_url)
                 return
+            self.last_api_server_health_detail = detail
             await asyncio.sleep(2)
-        raise RuntimeError("Fish API server did not become healthy before timeout")
+        raise RuntimeError(
+            "Fish API server did not become healthy before timeout"
+            + (f": {self.last_api_server_health_detail}" if self.last_api_server_health_detail else "")
+        )
 
     async def connect_once(self) -> None:
         url = append_token(self.config.manager_url, self.config.worker_token)
@@ -214,20 +222,35 @@ class Worker:
             await send_msg(ws, "worker_hello", self.worker_hello())
 
             heartbeat_task = asyncio.create_task(self.heartbeat_loop(ws))
+            reader_task = asyncio.create_task(self.manager_reader_loop(ws))
             try:
-                async for raw in ws:
-                    if isinstance(raw, str):
-                        continue
-                    message = unpack_msg(raw)
-                    if message.get("type") == "inference_request":
-                        data = message["data"]
-                        asyncio.create_task(self.handle_inference(ws, data))
-                    elif message.get("type") == "cancel_request":
-                        log("cancel requested", data=message.get("data"))
+                done, _ = await asyncio.wait(
+                    {heartbeat_task, reader_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    exc = task.exception()
+                    if exc is not None:
+                        raise exc
+                log("manager connection ended", worker_id=self.config.worker_id)
             finally:
-                heartbeat_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat_task
+                for task in (heartbeat_task, reader_task):
+                    if not task.done():
+                        task.cancel()
+                for task in (heartbeat_task, reader_task):
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
+
+    async def manager_reader_loop(self, ws: Any) -> None:
+        async for raw in ws:
+            if isinstance(raw, str):
+                continue
+            message = unpack_msg(raw)
+            if message.get("type") == "inference_request":
+                data = message["data"]
+                asyncio.create_task(self.handle_inference(ws, data))
+            elif message.get("type") == "cancel_request":
+                log("cancel requested", data=message.get("data"))
 
     def worker_hello(self) -> dict[str, Any]:
         gpu = detect_gpu()
@@ -249,7 +272,8 @@ class Worker:
 
     async def heartbeat_loop(self, ws: Any) -> None:
         while True:
-            healthy = await self.api_server_healthy()
+            healthy, detail = await self.api_server_health()
+            self.log_api_server_health_change(healthy, detail)
             gpu = detect_gpu()
             await send_msg(
                 ws,
@@ -271,14 +295,37 @@ class Worker:
             )
             await asyncio.sleep(self.config.heartbeat_interval_seconds)
 
+    def log_api_server_health_change(self, healthy: bool, detail: str | None) -> None:
+        if healthy:
+            self.last_error = None
+        else:
+            self.last_error = detail or "Fish API server health check failed"
+
+        if self.last_api_server_healthy == healthy and self.last_api_server_health_detail == detail:
+            return
+
+        log(
+            "Fish API server health changed",
+            healthy=healthy,
+            detail=detail,
+            api_server_url=self.config.api_server_url,
+        )
+        self.last_api_server_healthy = healthy
+        self.last_api_server_health_detail = detail
+
     async def api_server_healthy(self) -> bool:
+        healthy, _ = await self.api_server_health()
+        return healthy
+
+    async def api_server_health(self) -> tuple[bool, str | None]:
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(f"{self.config.api_server_url}/v1/health", timeout=3) as response:
-                    return 200 <= response.status < 500
-            except Exception:  # noqa: BLE001
-                return False
-        return False
+                    if response.status == 200:
+                        return True, None
+                    return False, f"HTTP {response.status}"
+            except Exception as exc:  # noqa: BLE001
+                return False, f"{type(exc).__name__}: {exc}"
 
     async def acquire_request_slot(self, request_id: str) -> bool:
         async with self.capacity_condition:

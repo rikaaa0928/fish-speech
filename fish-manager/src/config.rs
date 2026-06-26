@@ -11,6 +11,7 @@ pub struct Config {
     pub blob_local_dir: PathBuf,
     pub retry_on_worker_overload: bool,
     pub max_request_body_bytes: usize,
+    pub worker_heartbeat_stale_after_seconds: i64,
 }
 
 impl Config {
@@ -50,6 +51,10 @@ impl Config {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(64 * 1024 * 1024);
+        let worker_heartbeat_stale_after_seconds = env::var("WORKER_HEARTBEAT_STALE_AFTER_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(30);
 
         Ok(Self {
             bind_addr,
@@ -59,6 +64,7 @@ impl Config {
             blob_local_dir,
             retry_on_worker_overload,
             max_request_body_bytes,
+            worker_heartbeat_stale_after_seconds,
         })
     }
 }

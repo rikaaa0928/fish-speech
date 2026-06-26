@@ -14,6 +14,7 @@ use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::{mpsc, RwLock};
+use uuid::Uuid;
 
 use crate::{
     error::{AppError, AppResult},
@@ -54,37 +55,56 @@ async fn handle_worker_socket(state: AppState, mut socket: WebSocket) {
     let gpu_name = hello.gpu_name.clone();
     let gpu_count = hello.gpu_count;
     let sglang_url = hello.sglang_url.clone();
+    let connection_id = Uuid::new_v4().simple().to_string();
     let (tx, mut rx) = mpsc::channel::<WireMessage>(128);
     let manager_inflight = Arc::new(AtomicU32::new(0));
-    let status = Arc::new(RwLock::new(status_from_hello(hello)));
+    let status = Arc::new(RwLock::new(status_from_hello(hello, connection_id.clone())));
     let handle = WorkerHandle {
         worker_id: worker_id.clone(),
+        connection_id: connection_id.clone(),
         tx,
         status,
         manager_inflight: manager_inflight.clone(),
     };
 
-    // TODO(ha): add manager instance ID and worker sticky registration.
-    state.workers.insert(worker_id.clone(), handle.clone());
+    if let Some(previous) = state.workers.insert(worker_id.clone(), handle.clone()) {
+        let failed_pending =
+            fail_pending_for_worker(&state, &worker_id, &previous.connection_id).await;
+        tracing::warn!(
+            worker_id = %worker_id,
+            old_connection_id = %previous.connection_id,
+            new_connection_id = %connection_id,
+            old_manager_inflight = previous.manager_inflight.load(Ordering::Relaxed),
+            failed_pending,
+            "replaced existing worker connection with same worker_id"
+        );
+    }
     tracing::info!(
-        worker_id,
-        version,
-        model_id,
-        model_revision,
-        gpu_name,
+        worker_id = %worker_id,
+        connection_id = %connection_id,
+        version = %version,
+        model_id = %model_id,
+        model_revision = ?model_revision,
+        gpu_name = ?gpu_name,
         gpu_count,
-        sglang_url,
+        sglang_url = %sglang_url,
         "worker connected"
     );
 
     let (mut sender, mut receiver) = socket.split();
     let writer_worker_id = worker_id.clone();
+    let writer_connection_id = connection_id.clone();
     let writer = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
             let bytes = match rmp_serde::to_vec_named(&message) {
                 Ok(bytes) => bytes,
                 Err(error) => {
-                    tracing::error!(?error, worker_id = %writer_worker_id, "failed to encode worker message");
+                    tracing::error!(
+                        ?error,
+                        worker_id = %writer_worker_id,
+                        connection_id = %writer_connection_id,
+                        "failed to encode worker message"
+                    );
                     continue;
                 }
             };
@@ -100,22 +120,56 @@ async fn handle_worker_socket(state: AppState, mut socket: WebSocket) {
             Ok(Message::Binary(bytes)) => match rmp_serde::from_slice::<WireMessage>(&bytes) {
                 Ok(message) => process_worker_message(&state, &handle, message).await,
                 Err(error) => {
-                    tracing::warn!(?error, worker_id = %worker_id, "invalid worker message")
+                    tracing::warn!(
+                        ?error,
+                        worker_id = %worker_id,
+                        connection_id = %connection_id,
+                        "invalid worker message"
+                    )
                 }
             },
             Ok(Message::Close(_)) => break,
             Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Text(_)) => {}
             Err(error) => {
-                tracing::warn!(?error, worker_id = %worker_id, "worker websocket error");
+                tracing::warn!(
+                    ?error,
+                    worker_id = %worker_id,
+                    connection_id = %connection_id,
+                    "worker websocket error"
+                );
                 break;
             }
         }
     }
 
     writer.abort();
-    state.workers.remove(&worker_id);
-    fail_pending_for_worker(&state, &worker_id).await;
-    tracing::info!(worker_id, "worker disconnected");
+    let removed = state
+        .workers
+        .remove_if(&worker_id, |_, current| {
+            current.connection_id == connection_id
+        })
+        .is_some();
+    let failed_pending = fail_pending_for_worker(&state, &worker_id, &connection_id).await;
+    if removed {
+        tracing::info!(
+            worker_id = %worker_id,
+            connection_id = %connection_id,
+            failed_pending,
+            "worker disconnected"
+        );
+    } else {
+        let current_connection_id = state
+            .workers
+            .get(&worker_id)
+            .map(|entry| entry.connection_id.clone());
+        tracing::info!(
+            worker_id = %worker_id,
+            connection_id = %connection_id,
+            current_connection_id = ?current_connection_id,
+            failed_pending,
+            "stale worker connection disconnected without removing current registration"
+        );
+    }
 }
 
 async fn receive_hello(socket: &mut WebSocket) -> AppResult<WorkerHello> {
@@ -145,12 +199,49 @@ async fn process_worker_message(state: &AppState, handle: &WorkerHandle, message
     match message {
         WireMessage::Heartbeat(heartbeat) => {
             if heartbeat.worker_id != handle.worker_id {
-                tracing::warn!(worker_id = %handle.worker_id, heartbeat_worker_id = %heartbeat.worker_id, "heartbeat worker_id mismatch");
+                tracing::warn!(
+                    worker_id = %handle.worker_id,
+                    connection_id = %handle.connection_id,
+                    heartbeat_worker_id = %heartbeat.worker_id,
+                    "heartbeat worker_id mismatch"
+                );
                 return;
             }
             let mut status = handle.status.write().await;
+            let previous_ready = status.ready;
+            let previous_sglang_healthy = status.sglang_healthy;
+            let previous_last_error = status.last_error.clone();
             status.apply_heartbeat(heartbeat);
             status.manager_inflight = handle.manager_inflight.load(Ordering::Relaxed);
+            if previous_ready != status.ready
+                || previous_sglang_healthy != status.sglang_healthy
+                || previous_last_error != status.last_error
+            {
+                tracing::info!(
+                    worker_id = %handle.worker_id,
+                    connection_id = %handle.connection_id,
+                    ready = status.ready,
+                    previous_ready,
+                    sglang_healthy = status.sglang_healthy,
+                    previous_sglang_healthy,
+                    inflight = status.inflight,
+                    queued = status.queued,
+                    manager_inflight = status.manager_inflight,
+                    last_error = ?status.last_error,
+                    "worker heartbeat state changed"
+                );
+            } else {
+                tracing::debug!(
+                    worker_id = %handle.worker_id,
+                    connection_id = %handle.connection_id,
+                    ready = status.ready,
+                    sglang_healthy = status.sglang_healthy,
+                    inflight = status.inflight,
+                    queued = status.queued,
+                    manager_inflight = status.manager_inflight,
+                    "worker heartbeat received"
+                );
+            }
         }
         WireMessage::InferenceChunk(chunk) => {
             let request_id = chunk.request_id.clone();
@@ -165,17 +256,25 @@ async fn process_worker_message(state: &AppState, handle: &WorkerHandle, message
             let request_id = done.request_id.clone();
             if let Some((_, pending)) = state.pending.remove(&request_id) {
                 let _ = pending.tx.send(WorkerEvent::Done(done)).await;
-                if pending.worker_id == handle.worker_id {
+                if pending.worker_id == handle.worker_id
+                    && pending.connection_id == handle.connection_id
+                {
                     handle.manager_inflight.fetch_sub(1, Ordering::Relaxed);
                 }
             } else {
-                tracing::warn!(worker_id = %handle.worker_id, request_id = %request_id, "received done for unknown request");
+                tracing::warn!(
+                    worker_id = %handle.worker_id,
+                    connection_id = %handle.connection_id,
+                    request_id = %request_id,
+                    "received done for unknown request"
+                );
             }
         }
         WireMessage::InferenceError(error) => {
             let request_id = error.request_id.clone();
             tracing::warn!(
                 worker_id = %handle.worker_id,
+                connection_id = %handle.connection_id,
                 request_id = %request_id,
                 code = %error.code,
                 retryable = error.retryable,
@@ -184,28 +283,40 @@ async fn process_worker_message(state: &AppState, handle: &WorkerHandle, message
             );
             if let Some((_, pending)) = state.pending.remove(&request_id) {
                 let _ = pending.tx.send(WorkerEvent::Error(error)).await;
-                if pending.worker_id == handle.worker_id {
+                if pending.worker_id == handle.worker_id
+                    && pending.connection_id == handle.connection_id
+                {
                     handle.manager_inflight.fetch_sub(1, Ordering::Relaxed);
                 }
             } else {
-                tracing::warn!(worker_id = %handle.worker_id, request_id = %request_id, "received error for unknown request");
+                tracing::warn!(
+                    worker_id = %handle.worker_id,
+                    connection_id = %handle.connection_id,
+                    request_id = %request_id,
+                    "received error for unknown request"
+                );
             }
         }
         WireMessage::WorkerHello(_)
         | WireMessage::InferenceRequest(_)
         | WireMessage::CancelRequest(_) => {
-            tracing::warn!(worker_id = %handle.worker_id, "unexpected worker message")
+            tracing::warn!(
+                worker_id = %handle.worker_id,
+                connection_id = %handle.connection_id,
+                "unexpected worker message"
+            )
         }
     }
 }
 
-async fn fail_pending_for_worker(state: &AppState, worker_id: &str) {
+async fn fail_pending_for_worker(state: &AppState, worker_id: &str, connection_id: &str) -> usize {
     let request_ids: Vec<String> = state
         .pending
         .iter()
-        .filter(|entry| entry.worker_id == worker_id)
+        .filter(|entry| entry.worker_id == worker_id && entry.connection_id == connection_id)
         .map(|entry| entry.key().clone())
         .collect();
+    let failed_pending = request_ids.len();
 
     for request_id in request_ids {
         if let Some((_, pending)) = state.pending.remove(&request_id) {
@@ -220,12 +331,14 @@ async fn fail_pending_for_worker(state: &AppState, worker_id: &str) {
                 .await;
         }
     }
+    failed_pending
 }
 
-fn status_from_hello(hello: WorkerHello) -> WorkerStatus {
+fn status_from_hello(hello: WorkerHello, connection_id: String) -> WorkerStatus {
     let now = Utc::now();
     WorkerStatus {
         worker_id: hello.worker_id,
+        connection_id,
         version: hello.version,
         model_id: hello.model_id,
         model_revision: hello.model_revision,
@@ -248,6 +361,7 @@ fn status_from_hello(hello: WorkerHello) -> WorkerStatus {
         last_error: None,
         connected_at: now,
         last_heartbeat_at: now,
+        heartbeat_age_ms: 0,
         manager_inflight: 0,
     }
 }

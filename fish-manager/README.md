@@ -70,13 +70,15 @@ ws://127.0.0.1:8080/internal/workers/ws
 
 ## Public Endpoints
 
+See [API.md](API.md) for the standalone API calling guide with request fields and curl examples.
+
 - `GET /health`
 - `GET /v1/workers`
 - `POST /v1/audio/speech`
 - `POST /v1/tts`
 - `POST /v1/references/add`
 - `GET /v1/references/list`
-- `DELETE /v1/references/delete`
+- `DELETE|POST /v1/references/delete`
 - `POST /v1/references/update`
 
 ## API Availability Check
@@ -150,6 +152,21 @@ curl -X POST http://127.0.0.1:8080/v1/references/add \
 curl -X POST http://127.0.0.1:8080/v1/audio/speech \
   -H 'Authorization: Bearer sk-live-1' \
   -H 'Content-Type: application/json' \
+  -o output.wav \
+  -d '{
+    "input": "Hello from fish-manager",
+    "voice": "speaker_a",
+    "response_format": "wav"
+  }'
+```
+
+To pin a request to one connected worker and disable cross-worker fallback for that request, add `X-Fish-Worker-ID`:
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/audio/speech \
+  -H 'Authorization: Bearer sk-live-1' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Fish-Worker-ID: worker-a' \
   -o output.wav \
   -d '{
     "input": "Hello from fish-manager",

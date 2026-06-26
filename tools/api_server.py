@@ -32,6 +32,13 @@ from tools.server.views import routes
 ENV_ARGS_KEY = "FISH_API_SERVER_ARGS"
 
 
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value not in {"0", "false", "False", "no", "NO"}
+
+
 class API(ExceptionHandler):
     def __init__(self, args: Namespace | None = None):
         self.args = args or parse_args()
@@ -141,5 +148,6 @@ if __name__ == "__main__":
         port=int(port),
         workers=args.workers,
         log_level="info",
+        access_log=env_bool("FISH_API_SERVER_ACCESS_LOG", True),
         factory=True,
     )

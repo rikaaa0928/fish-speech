@@ -38,18 +38,38 @@ impl AppState {
 
     pub async fn select_worker(&self, exclude: &HashSet<String>) -> AppResult<WorkerHandle> {
         let mut best: Option<(u32, WorkerHandle)> = None;
+        let now = Utc::now();
+        let mut total = 0_u32;
+        let mut excluded = 0_u32;
+        let mut not_ready = 0_u32;
+        let mut unhealthy = 0_u32;
+        let mut stale = 0_u32;
+        let mut candidates = 0_u32;
 
         for entry in self.workers.iter() {
+            total += 1;
             if exclude.contains(entry.key()) {
+                excluded += 1;
                 continue;
             }
 
             let worker = entry.value().clone();
             let status = worker.status.read().await.clone();
-            if !status.ready || !status.sglang_healthy {
+            let heartbeat_age_seconds = (now - status.last_heartbeat_at).num_seconds();
+            if heartbeat_age_seconds > self.config.worker_heartbeat_stale_after_seconds {
+                stale += 1;
+                continue;
+            }
+            if !status.ready {
+                not_ready += 1;
+                continue;
+            }
+            if !status.sglang_healthy {
+                unhealthy += 1;
                 continue;
             }
 
+            candidates += 1;
             let manager_inflight = worker.manager_inflight.load(Ordering::Relaxed);
             let effective_inflight = manager_inflight.max(status.inflight);
             let pressure = effective_inflight.saturating_add(status.queued);
@@ -61,16 +81,65 @@ impl AppState {
         }
 
         best.map(|(_, worker)| worker).ok_or_else(|| {
+            tracing::warn!(
+                total_workers = total,
+                excluded_workers = excluded,
+                not_ready_workers = not_ready,
+                unhealthy_workers = unhealthy,
+                stale_workers = stale,
+                candidate_workers = candidates,
+                heartbeat_stale_after_seconds = self.config.worker_heartbeat_stale_after_seconds,
+                "no available worker matched selection criteria"
+            );
             AppError::TooManyRequests(
                 "All workers are overloaded or unavailable. Please retry later.".to_string(),
             )
         })
+    }
+
+    pub async fn select_worker_by_id(&self, worker_id: &str) -> AppResult<WorkerHandle> {
+        let worker = self
+            .workers
+            .get(worker_id)
+            .map(|entry| entry.value().clone())
+            .ok_or_else(|| AppError::NotFound(format!("worker '{worker_id}' not found")))?;
+
+        let status = worker.status.read().await.clone();
+        let heartbeat_age_seconds = (Utc::now() - status.last_heartbeat_at).num_seconds();
+        if heartbeat_age_seconds > self.config.worker_heartbeat_stale_after_seconds {
+            tracing::warn!(
+                worker_id,
+                connection_id = %worker.connection_id,
+                heartbeat_age_seconds,
+                heartbeat_stale_after_seconds = self.config.worker_heartbeat_stale_after_seconds,
+                "selected worker has stale heartbeat"
+            );
+            return Err(AppError::TooManyRequests(format!(
+                "Selected worker '{worker_id}' heartbeat is stale. Please retry later."
+            )));
+        }
+        if !status.ready || !status.sglang_healthy {
+            tracing::warn!(
+                worker_id,
+                connection_id = %worker.connection_id,
+                ready = status.ready,
+                sglang_healthy = status.sglang_healthy,
+                last_error = ?status.last_error,
+                "selected worker is not available"
+            );
+            return Err(AppError::TooManyRequests(format!(
+                "Selected worker '{worker_id}' is unavailable. Please retry later."
+            )));
+        }
+
+        Ok(worker)
     }
 }
 
 #[derive(Clone)]
 pub struct WorkerHandle {
     pub worker_id: String,
+    pub connection_id: String,
     pub tx: mpsc::Sender<WireMessage>,
     pub status: Arc<RwLock<WorkerStatus>>,
     pub manager_inflight: Arc<AtomicU32>,
@@ -79,6 +148,7 @@ pub struct WorkerHandle {
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkerStatus {
     pub worker_id: String,
+    pub connection_id: String,
     pub version: String,
     pub model_id: String,
     pub model_revision: Option<String>,
@@ -101,6 +171,7 @@ pub struct WorkerStatus {
     pub last_error: Option<String>,
     pub connected_at: DateTime<Utc>,
     pub last_heartbeat_at: DateTime<Utc>,
+    pub heartbeat_age_ms: i64,
     pub manager_inflight: u32,
 }
 
@@ -118,6 +189,7 @@ impl WorkerStatus {
         self.ewma_latency_ms = heartbeat.ewma_latency_ms;
         self.last_error = heartbeat.last_error;
         self.last_heartbeat_at = Utc::now();
+        self.heartbeat_age_ms = 0;
     }
 }
 
@@ -131,5 +203,6 @@ pub enum WorkerEvent {
 #[derive(Clone)]
 pub struct PendingRequest {
     pub worker_id: String,
+    pub connection_id: String,
     pub tx: mpsc::Sender<WorkerEvent>,
 }
