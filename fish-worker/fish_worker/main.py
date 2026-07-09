@@ -144,6 +144,7 @@ class Worker:
         self.last_error: str | None = None
         self.last_api_server_healthy: bool | None = None
         self.last_api_server_health_detail: str | None = None
+        self.last_api_server_health_checked_at: float | None = None
         self.started_at = datetime.now(timezone.utc)
         self.stop_event = asyncio.Event()
         self.api_server_process: asyncio.subprocess.Process | None = None
@@ -206,6 +207,8 @@ class Worker:
             healthy, detail = await self.api_server_health()
             if healthy:
                 log("Fish API server is healthy", api_server_url=self.config.api_server_url)
+                self.last_api_server_healthy = True
+                self.last_api_server_health_detail = None
                 return
             self.last_api_server_health_detail = detail
             await asyncio.sleep(2)
@@ -272,7 +275,7 @@ class Worker:
 
     async def heartbeat_loop(self, ws: Any) -> None:
         while True:
-            healthy, detail = await self.api_server_health()
+            healthy, detail = await self.api_server_health_for_heartbeat()
             self.log_api_server_health_change(healthy, detail)
             gpu = detect_gpu()
             await send_msg(
@@ -317,7 +320,36 @@ class Worker:
         healthy, _ = await self.api_server_health()
         return healthy
 
+    async def api_server_health_for_heartbeat(self) -> tuple[bool, str | None]:
+        process_error = self.api_server_process_error()
+        if process_error is not None:
+            return False, process_error
+
+        if self.local_inflight > 0 and self.last_api_server_healthy is not None:
+            return self.last_api_server_healthy, self.last_api_server_health_detail
+
+        now = time.monotonic()
+        if (
+            self.local_inflight == 0
+            and self.last_api_server_health_checked_at is not None
+            and now - self.last_api_server_health_checked_at < self.config.heartbeat_interval_seconds
+            and self.last_api_server_healthy is not None
+        ):
+            return self.last_api_server_healthy, self.last_api_server_health_detail
+
+        return await self.api_server_health()
+
+    def api_server_process_error(self) -> str | None:
+        if not self.config.manage_api_server:
+            return None
+        if self.api_server_process is None:
+            return "Fish API server process is not running"
+        if self.api_server_process.returncode is not None:
+            return f"Fish API server process exited with code {self.api_server_process.returncode}"
+        return None
+
     async def api_server_health(self) -> tuple[bool, str | None]:
+        self.last_api_server_health_checked_at = time.monotonic()
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(f"{self.config.api_server_url}/v1/health", timeout=3) as response:
