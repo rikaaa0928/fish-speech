@@ -55,6 +55,14 @@ Start the worker after setup:
 bash scripts/autodl_start_worker.sh
 ```
 
+To keep the worker running after the SSH session exits and restart it automatically if it stops, use the restart supervisor:
+
+```bash
+nohup setsid bash scripts/autodl_run_worker_forever.sh > run/fish-worker-supervisor.out 2>&1 < /dev/null &
+```
+
+Worker logs are written to `run/fish-worker.log`; supervisor restart logs are written to `run/fish-worker-supervisor.log`.
+
 The setup script installs `uv`, creates `fish-worker/.venv`, installs the root Fish Speech API server dependencies and the worker package into that venv, writes `fish-worker/.env`, downloads `hfd.sh` to `/root/autodl-tmp/cache/hfd.sh`, and downloads `fishaudio/s2-pro` to `/autodl-fs/data/models/s2-pro` by default.
 
 Python dependencies use the Aliyun PyPI mirror by default: `PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple`. `uv python install` uses `UV_PYTHON_INSTALL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone`. Override these if needed.
