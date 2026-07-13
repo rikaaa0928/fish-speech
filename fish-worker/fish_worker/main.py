@@ -25,6 +25,19 @@ import websockets
 from fish_worker import __version__
 
 
+GPU_FATAL_EXIT_CODE = 70
+
+CUDA_TINY_OP_CODE = """
+import torch
+
+if not torch.cuda.is_available():
+    raise SystemExit("torch.cuda.is_available() is False")
+if torch.cuda.device_count() < 1:
+    raise SystemExit("torch.cuda.device_count() is 0")
+torch.empty(1, device="cuda").sum().item()
+"""
+
+
 def log(message: str, **fields: Any) -> None:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     parts = [timestamp, message]
@@ -90,6 +103,12 @@ class Config:
     api_server_references_dir: Path
     heartbeat_interval_seconds: float
     manage_api_server: bool
+    require_gpu: bool
+    cuda_probe_interval_seconds: float
+    cuda_probe_timeout_seconds: float
+    gpu_watchdog_failures_before_exit: int
+    api_server_watchdog_failures_before_restart: int
+    api_server_restart_cooldown_seconds: float
 
     @property
     def api_server_url(self) -> str:
@@ -128,7 +147,24 @@ class Config:
             api_server_references_dir=Path(os.getenv("API_SERVER_REFERENCES_DIR", "references")),
             heartbeat_interval_seconds=float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "5")),
             manage_api_server=env_bool("WORKER_MANAGE_API_SERVER", True),
+            require_gpu=env_bool("WORKER_REQUIRE_GPU", True),
+            cuda_probe_interval_seconds=float(os.getenv("CUDA_PROBE_INTERVAL_SECONDS", "30")),
+            cuda_probe_timeout_seconds=float(os.getenv("CUDA_PROBE_TIMEOUT_SECONDS", "10")),
+            gpu_watchdog_failures_before_exit=max(1, env_int("GPU_WATCHDOG_FAILURES_BEFORE_EXIT", 2)),
+            api_server_watchdog_failures_before_restart=max(
+                1, env_int("API_SERVER_WATCHDOG_FAILURES_BEFORE_RESTART", 3)
+            ),
+            api_server_restart_cooldown_seconds=float(os.getenv("API_SERVER_RESTART_COOLDOWN_SECONDS", "30")),
         )
+
+
+@dataclass(frozen=True)
+class HealthCheck:
+    healthy: bool
+    detail: str | None
+    gpu: dict[str, Any]
+    gpu_failure: bool = False
+    api_server_failure: bool = False
 
 
 class Worker:
@@ -145,6 +181,12 @@ class Worker:
         self.last_api_server_healthy: bool | None = None
         self.last_api_server_health_detail: str | None = None
         self.last_api_server_health_checked_at: float | None = None
+        self.last_cuda_probe_checked_at: float | None = None
+        self.last_cuda_probe_result: tuple[bool, str | None] | None = None
+        self.gpu_watchdog_failures = 0
+        self.api_server_watchdog_failures = 0
+        self.last_api_server_restart_at: float | None = None
+        self.api_server_restart_lock = asyncio.Lock()
         self.started_at = datetime.now(timezone.utc)
         self.stop_event = asyncio.Event()
         self.api_server_process: asyncio.subprocess.Process | None = None
@@ -204,13 +246,13 @@ class Worker:
     async def wait_api_server_ready(self) -> None:
         deadline = time.monotonic() + env_int("API_SERVER_STARTUP_TIMEOUT_SECONDS", 900)
         while time.monotonic() < deadline:
-            healthy, detail = await self.api_server_health()
-            if healthy:
+            health = await self.deep_health_check(force_cuda_probe=True)
+            if health.healthy:
                 log("Fish API server is healthy", api_server_url=self.config.api_server_url)
                 self.last_api_server_healthy = True
                 self.last_api_server_health_detail = None
                 return
-            self.last_api_server_health_detail = detail
+            self.last_api_server_health_detail = health.detail
             await asyncio.sleep(2)
         raise RuntimeError(
             "Fish API server did not become healthy before timeout"
@@ -275,23 +317,23 @@ class Worker:
 
     async def heartbeat_loop(self, ws: Any) -> None:
         while True:
-            healthy, detail = await self.api_server_health_for_heartbeat()
-            self.log_api_server_health_change(healthy, detail)
-            gpu = detect_gpu()
+            health = await self.deep_health_check()
+            self.log_api_server_health_change(health.healthy, health.detail)
+            await self.apply_health_watchdog(health)
             await send_msg(
                 ws,
                 "heartbeat",
                 {
                     "worker_id": self.config.worker_id,
-                    "ready": healthy,
-                    "sglang_healthy": healthy,
+                    "ready": health.healthy,
+                    "sglang_healthy": health.healthy,
                     "inflight": self.local_inflight,
                     "queued": self.local_queued,
                     "max_running_requests": self.config.api_server_max_running_requests,
                     "max_queued_requests": self.config.api_server_max_queued_requests,
-                    "vram_used_mb": gpu.get("vram_used_mb"),
-                    "vram_free_mb": gpu.get("vram_free_mb"),
-                    "gpu_utilization_percent": gpu.get("gpu_utilization_percent"),
+                    "vram_used_mb": health.gpu.get("vram_used_mb"),
+                    "vram_free_mb": health.gpu.get("vram_free_mb"),
+                    "gpu_utilization_percent": health.gpu.get("gpu_utilization_percent"),
                     "ewma_latency_ms": self.ewma_latency_ms,
                     "last_error": self.last_error,
                 },
@@ -317,8 +359,26 @@ class Worker:
         self.last_api_server_health_detail = detail
 
     async def api_server_healthy(self) -> bool:
-        healthy, _ = await self.api_server_health()
-        return healthy
+        return (await self.deep_health_check()).healthy
+
+    async def deep_health_check(self, *, force_cuda_probe: bool = False) -> HealthCheck:
+        gpu = detect_gpu()
+        if self.config.require_gpu and gpu.get("gpu_count", 0) < 1:
+            detail = "gpu_unavailable: nvidia-smi found no usable GPU"
+            if gpu.get("error"):
+                detail = f"{detail}: {gpu['error']}"
+            return HealthCheck(False, detail, gpu, gpu_failure=True)
+
+        healthy, detail = await self.api_server_health_for_heartbeat()
+        if not healthy:
+            return HealthCheck(False, detail, gpu, api_server_failure=True)
+
+        if self.config.require_gpu:
+            cuda_ok, cuda_detail = await self.cuda_tiny_op_health(force=force_cuda_probe)
+            if not cuda_ok:
+                return HealthCheck(False, f"cuda_unavailable: {cuda_detail}", gpu, gpu_failure=True)
+
+        return HealthCheck(True, None, gpu)
 
     async def api_server_health_for_heartbeat(self) -> tuple[bool, str | None]:
         process_error = self.api_server_process_error()
@@ -358,6 +418,86 @@ class Worker:
                     return False, f"HTTP {response.status}"
             except Exception as exc:  # noqa: BLE001
                 return False, f"{type(exc).__name__}: {exc}"
+
+    async def cuda_tiny_op_health(self, *, force: bool = False) -> tuple[bool, str | None]:
+        now = time.monotonic()
+        if (
+            not force
+            and self.last_cuda_probe_result is not None
+            and self.last_cuda_probe_checked_at is not None
+            and now - self.last_cuda_probe_checked_at < self.config.cuda_probe_interval_seconds
+        ):
+            return self.last_cuda_probe_result
+
+        result = await asyncio.to_thread(run_cuda_tiny_op, self.config.cuda_probe_timeout_seconds)
+        self.last_cuda_probe_checked_at = now
+        self.last_cuda_probe_result = result
+        return result
+
+    async def apply_health_watchdog(self, health: HealthCheck) -> None:
+        if health.gpu_failure:
+            self.gpu_watchdog_failures += 1
+            log(
+                "GPU watchdog failure",
+                failures=self.gpu_watchdog_failures,
+                threshold=self.config.gpu_watchdog_failures_before_exit,
+                detail=health.detail,
+            )
+            if self.gpu_watchdog_failures >= self.config.gpu_watchdog_failures_before_exit:
+                log("GPU watchdog exiting worker container", exit_code=GPU_FATAL_EXIT_CODE, detail=health.detail)
+                raise SystemExit(GPU_FATAL_EXIT_CODE)
+        else:
+            self.gpu_watchdog_failures = 0
+
+        if health.api_server_failure:
+            await self.record_api_server_failure(health.detail or "Fish API server health check failed")
+        elif health.healthy:
+            self.api_server_watchdog_failures = 0
+
+    async def record_api_server_failure(self, detail: str) -> None:
+        self.api_server_watchdog_failures += 1
+        log(
+            "Fish API server watchdog failure",
+            failures=self.api_server_watchdog_failures,
+            threshold=self.config.api_server_watchdog_failures_before_restart,
+            detail=detail,
+        )
+        if self.api_server_watchdog_failures < self.config.api_server_watchdog_failures_before_restart:
+            return
+        if not self.config.manage_api_server:
+            return
+        await self.restart_api_server(reason=detail)
+
+    async def restart_api_server(self, *, reason: str) -> None:
+        async with self.api_server_restart_lock:
+            now = time.monotonic()
+            if (
+                self.last_api_server_restart_at is not None
+                and now - self.last_api_server_restart_at < self.config.api_server_restart_cooldown_seconds
+            ):
+                return
+
+            self.last_api_server_restart_at = now
+            self.api_server_watchdog_failures = 0
+            self.last_api_server_healthy = False
+            self.last_api_server_health_detail = f"restarting Fish API server: {reason}"
+            self.last_cuda_probe_checked_at = None
+            self.last_cuda_probe_result = None
+            log("restarting Fish API server", reason=reason)
+            await self.stop_api_server()
+            self.api_server_process = await self.start_api_server()
+
+    async def stop_api_server(self) -> None:
+        process = self.api_server_process
+        if process is None or process.returncode is not None:
+            return
+
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=20)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
 
     async def acquire_request_slot(self, request_id: str) -> bool:
         async with self.capacity_condition:
@@ -503,6 +643,7 @@ class Worker:
                 )
         except aiohttp.ClientError as exc:
             self.last_error = str(exc)
+            await self.record_api_server_failure(f"{type(exc).__name__}: {exc}")
             log(
                 "api server request failed",
                 request_id=request_id,
@@ -626,6 +767,8 @@ class Worker:
                         code=code,
                         elapsed_ms=(time.monotonic() - started) * 1000,
                     )
+                    if response.status >= 500:
+                        await self.record_api_server_failure(f"inference HTTP {response.status}: {text[:200]}")
                     await send_error(ws, request_id, code, text, retryable=response.status >= 500)
                     return None
 
@@ -665,6 +808,7 @@ class Worker:
                     chunk_send_ms=chunk_send_ms,
                     first_chunk_ms=first_chunk_ms,
                 )
+                self.api_server_watchdog_failures = 0
                 return {
                     "audio_bytes": audio_bytes,
                     "chunks": chunks,
@@ -828,8 +972,8 @@ def detect_gpu() -> dict[str, Any]:
             text=True,
             timeout=2,
         )
-    except Exception:  # noqa: BLE001
-        return {"gpu_count": 0}
+    except Exception as exc:  # noqa: BLE001
+        return {"gpu_count": 0, "error": f"{type(exc).__name__}: {exc}"}
 
     rows = [row.strip() for row in output.splitlines() if row.strip()]
     if not rows:
@@ -847,6 +991,32 @@ def detect_gpu() -> dict[str, Any]:
         }
     except (IndexError, ValueError):
         return {"gpu_count": len(rows), "gpu_name": first[0] if first else None}
+
+
+def run_cuda_tiny_op(timeout: float) -> tuple[bool, str | None]:
+    try:
+        subprocess.check_output(
+            [sys.executable, "-c", CUDA_TINY_OP_CODE],
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+        )
+        return True, None
+    except subprocess.TimeoutExpired as exc:
+        return False, f"timeout after {timeout:.1f}s: {trim_output(exc.output)}"
+    except subprocess.CalledProcessError as exc:
+        return False, trim_output(exc.output)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def trim_output(output: str | bytes | None, limit: int = 500) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        output = output.decode(errors="replace")
+    output = " ".join(output.split())
+    return output[:limit]
 
 
 def install_signal_handlers(worker: Worker) -> None:
