@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::{
     config::Config,
     error::{AppError, AppResult},
-    protocol::{Heartbeat, WireMessage},
+    protocol::{Heartbeat, Priority, PriorityCounts, WireMessage},
     storage::VoiceStore,
 };
 
@@ -36,7 +36,11 @@ impl AppState {
         }
     }
 
-    pub async fn select_worker(&self, exclude: &HashSet<String>) -> AppResult<WorkerHandle> {
+    pub async fn select_worker(
+        &self,
+        exclude: &HashSet<String>,
+        priority: Priority,
+    ) -> AppResult<WorkerHandle> {
         let mut best: Option<(u32, WorkerHandle)> = None;
         let now = Utc::now();
         let mut total = 0_u32;
@@ -72,7 +76,7 @@ impl AppState {
             candidates += 1;
             let manager_inflight = worker.manager_inflight.load(Ordering::Relaxed);
             let effective_inflight = manager_inflight.max(status.inflight);
-            let pressure = effective_inflight.saturating_add(status.queued);
+            let pressure = effective_inflight.saturating_add(status.effective_queued(priority));
 
             match &best {
                 Some((best_pressure, _)) if pressure >= *best_pressure => {}
@@ -159,11 +163,13 @@ pub struct WorkerStatus {
     pub max_queued_requests: u32,
     pub worker_max_inflight: u32,
     pub worker_max_queue: u32,
+    pub max_queued_requests_by_priority: PriorityCounts,
     pub sglang_url: String,
     pub ready: bool,
     pub sglang_healthy: bool,
     pub inflight: u32,
     pub queued: u32,
+    pub queued_by_priority: PriorityCounts,
     pub vram_used_mb: Option<u64>,
     pub vram_free_mb: Option<u64>,
     pub gpu_utilization_percent: Option<f32>,
@@ -181,8 +187,10 @@ impl WorkerStatus {
         self.sglang_healthy = heartbeat.sglang_healthy;
         self.inflight = heartbeat.inflight;
         self.queued = heartbeat.queued;
+        self.queued_by_priority = heartbeat.queued_by_priority;
         self.max_running_requests = heartbeat.max_running_requests;
         self.max_queued_requests = heartbeat.max_queued_requests;
+        self.max_queued_requests_by_priority = heartbeat.max_queued_requests_by_priority;
         self.vram_used_mb = heartbeat.vram_used_mb;
         self.vram_free_mb = heartbeat.vram_free_mb;
         self.gpu_utilization_percent = heartbeat.gpu_utilization_percent;
@@ -190,6 +198,24 @@ impl WorkerStatus {
         self.last_error = heartbeat.last_error;
         self.last_heartbeat_at = Utc::now();
         self.heartbeat_age_ms = 0;
+    }
+
+    pub fn effective_queued(&self, priority: Priority) -> u32 {
+        if self.queued_by_priority.is_empty() {
+            return self.queued;
+        }
+
+        Priority::ALL
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.index() <= priority.index())
+            .map(|candidate| {
+                self.queued_by_priority
+                    .get(&candidate)
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .sum()
     }
 }
 

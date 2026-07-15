@@ -1,6 +1,60 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Priority {
+    V1,
+    V2,
+    V3,
+    V4,
+}
+
+impl Default for Priority {
+    fn default() -> Self {
+        Self::V3
+    }
+}
+
+impl Priority {
+    pub const ALL: [Self; 4] = [Self::V1, Self::V2, Self::V3, Self::V4];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "v1" => Some(Self::V1),
+            "v2" => Some(Self::V2),
+            "v3" => Some(Self::V3),
+            "v4" => Some(Self::V4),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::V1 => "v1",
+            Self::V2 => "v2",
+            Self::V3 => "v3",
+            Self::V4 => "v4",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::V1 => 0,
+            Self::V2 => 1,
+            Self::V3 => 2,
+            Self::V4 => 3,
+        }
+    }
+
+    pub fn allows(self, requested: Self) -> bool {
+        requested.index() >= self.index()
+    }
+}
+
+pub type PriorityCounts = BTreeMap<Priority, u32>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
@@ -27,6 +81,8 @@ pub struct WorkerHello {
     pub max_queued_requests: u32,
     pub worker_max_inflight: u32,
     pub worker_max_queue: u32,
+    #[serde(default)]
+    pub max_queued_requests_by_priority: PriorityCounts,
     pub sglang_url: String,
     pub started_at: DateTime<Utc>,
 }
@@ -38,8 +94,12 @@ pub struct Heartbeat {
     pub sglang_healthy: bool,
     pub inflight: u32,
     pub queued: u32,
+    #[serde(default)]
+    pub queued_by_priority: PriorityCounts,
     pub max_running_requests: u32,
     pub max_queued_requests: u32,
+    #[serde(default)]
+    pub max_queued_requests_by_priority: PriorityCounts,
     pub vram_used_mb: Option<u64>,
     pub vram_free_mb: Option<u64>,
     pub gpu_utilization_percent: Option<f32>,
@@ -63,6 +123,8 @@ pub struct InternalReference {
 pub struct InferenceRequest {
     pub request_id: String,
     pub api_kind: String,
+    #[serde(default)]
+    pub priority: Priority,
     pub payload: Value,
     pub references: Vec<InternalReference>,
     pub stream: bool,

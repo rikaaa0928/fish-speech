@@ -42,7 +42,7 @@ The shared setup script prepares the worker environment only. The manager script
 Useful overrides:
 
 - `MANAGER_BIND_ADDR=0.0.0.0:8080`
-- `OPENAI_API_KEYS=sk-live-1,sk-live-2`
+- `OPENAI_API_KEYS=sk-live-1,sk-live-2` or `OPENAI_API_KEYS=sk-v1:v1,sk-v3:v3`
 - `WORKER_TOKEN=replace-me`
 - `MAX_REQUEST_BODY_BYTES=67108864`
 - `AUTODL_FS=/root/autodl-fs`
@@ -55,6 +55,10 @@ Public APIs use OpenAI-compatible authentication:
 ```http
 Authorization: Bearer sk-live-1
 ```
+
+Public API tokens default to highest priority `v3`. To limit a token explicitly, append
+`:v1`, `:v2`, `:v3`, or `:v4` in `OPENAI_API_KEYS`. A `v1` token can request all
+priorities; a `v3` token can request only `v3` and `v4`.
 
 Workers authenticate separately with `WORKER_TOKEN` and connect to:
 
@@ -174,3 +178,5 @@ curl -X POST http://127.0.0.1:8080/v1/audio/speech \
     "response_format": "wav"
   }'
 ```
+
+To request a service priority, add `X-Fish-Priority`. Supported values are `v1`, `v2`, `v3`, and `v4`; omitted requests use `v3`.

@@ -80,7 +80,8 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 - `API_SERVER_URL`: optional worker target URL for an external Fish API server. Leave empty when the worker manages the API server.
 - `WORKER_MANAGE_API_SERVER`: set `0` to connect to an external server instead of starting `tools/api_server.py`.
 - `API_SERVER_MAX_RUNNING_REQUESTS`: worker local running request limit. This is enforced before requests reach the API server.
-- `API_SERVER_MAX_QUEUED_REQUESTS`: worker local queue limit, default `1`. Set `0` to reject overload immediately.
+- `API_SERVER_MAX_QUEUED_REQUESTS`: worker local `v3` queue limit, default `1`. Set `0` to reject overload immediately.
+- `API_SERVER_MAX_QUEUED_REQUESTS_V1` / `_V2` / `_V3` / `_V4`: optional per-priority local queue limits. Unset priorities use the `v3` limit.
 - `API_SERVER_TTS_MAX_NEW_TOKENS`: default output-token limit when a client request omits `max_new_tokens`.
 - `API_SERVER_COMPILE`: starts Fish API server with `--compile`, default `1`.
 - `API_SERVER_HALF`: starts Fish API server with `--half`, default `0`; default bf16 was more stable in testing.
@@ -89,6 +90,6 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 - `API_SERVER_REFERENCES_DIR`: directory that Fish API server reads as `references/`, default `references` relative to the repository root. Docker mounts this at `/app/references`.
 - `PYTORCH_ALLOC_CONF`: PyTorch CUDA allocator setting, default `expandable_segments:True`.
 
-When `API_SERVER_MAX_RUNNING_REQUESTS` and `API_SERVER_MAX_QUEUED_REQUESTS` are exceeded, the worker returns retryable `overloaded` to the manager instead of sending the request to the local API server.
+When `API_SERVER_MAX_RUNNING_REQUESTS` and the effective priority queue limit are exceeded, the worker returns retryable `overloaded` to the manager instead of sending the request to the local API server. Lower-priority effective queue length includes queued requests from higher priorities; for example, `v3` capacity counts queued `v1`, `v2`, and `v3` requests.
 
 Stored manager voices are pulled on demand. The worker writes them directly in Fish API server's on-disk format: `references/{reference_id}/sample.<ext>` and `references/{reference_id}/sample.lab`. For a request with one stored `voice_id/checksum` reference, `/v1/tts` receives only `reference_id`. Inline client references without a stable stored voice ID are still forwarded as request-local audio bytes.

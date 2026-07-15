@@ -12,7 +12,7 @@
 Authorization: Bearer <OPENAI_API_KEY>
 ```
 
-Token 来自 manager 环境变量 `OPENAI_API_KEYS`，多个 key 使用英文逗号分隔。
+Token 来自 manager 环境变量 `OPENAI_API_KEYS`，多个 key 使用英文逗号分隔。未标注等级的 token 默认最高支持 `v3`；也可以写成 `sk-live-1:v1,sk-live-2:v3`。`v1` token 可以调用 `v1` 到 `v4`，`v3` token 只能调用 `v3` 和 `v4`。
 
 ### 请求头
 
@@ -29,6 +29,14 @@ X-Fish-Worker-ID: worker-a
 ```
 
 `X-Worker-ID` 也可作为兼容别名。指定 worker 后，本次请求只会发给该 worker；如果该 worker 失败、过载或断开，manager 不会 fallback 到其他 worker。
+
+语音合成接口可以通过 header 指定服务等级：
+
+```http
+X-Fish-Priority: v3
+```
+
+支持 `v1`、`v2`、`v3`、`v4` 四个等级，`v1` 最高。未指定时默认为 `v3`。
 
 ### 错误响应
 

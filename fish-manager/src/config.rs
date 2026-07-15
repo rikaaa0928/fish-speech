@@ -1,11 +1,13 @@
-use std::{collections::HashSet, env, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, env, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::{bail, Context};
+
+use crate::protocol::Priority;
 
 #[derive(Clone, Debug)]
 pub struct Config {
     pub bind_addr: SocketAddr,
-    pub openai_api_keys: Arc<HashSet<String>>,
+    pub openai_api_keys: Arc<HashMap<String, Priority>>,
     pub worker_token: String,
     pub sqlite_path: PathBuf,
     pub blob_local_dir: PathBuf,
@@ -22,12 +24,7 @@ impl Config {
             .context("MANAGER_BIND_ADDR must be a socket address")?;
 
         let keys = env::var("OPENAI_API_KEYS").unwrap_or_default();
-        let openai_api_keys: HashSet<String> = keys
-            .split(',')
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
+        let openai_api_keys = parse_openai_api_keys(&keys)?;
 
         if openai_api_keys.is_empty() {
             bail!("OPENAI_API_KEYS is required, for example OPENAI_API_KEYS=sk-live-1");
@@ -67,4 +64,40 @@ impl Config {
             worker_heartbeat_stale_after_seconds,
         })
     }
+}
+
+fn parse_openai_api_keys(keys: &str) -> anyhow::Result<HashMap<String, Priority>> {
+    let mut parsed = HashMap::new();
+
+    for raw_entry in keys.split(',') {
+        let entry = raw_entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+
+        let (token, highest_priority) = parse_key_priority_entry(entry)
+            .with_context(|| format!("invalid OPENAI_API_KEYS entry '{entry}'"))?;
+        if token.is_empty() {
+            bail!("OPENAI_API_KEYS contains an empty token");
+        }
+
+        parsed.insert(token.to_string(), highest_priority);
+    }
+
+    Ok(parsed)
+}
+
+fn parse_key_priority_entry(entry: &str) -> anyhow::Result<(&str, Priority)> {
+    for delimiter in [':', '='] {
+        if let Some((token, priority)) = entry.rsplit_once(delimiter) {
+            let priority = priority.trim();
+            if priority.starts_with('v') || priority.starts_with('V') {
+                let priority = Priority::parse(priority)
+                    .ok_or_else(|| anyhow::anyhow!("priority must be one of v1, v2, v3, v4"))?;
+                return Ok((token.trim(), priority));
+            }
+        }
+    }
+
+    Ok((entry.trim(), Priority::default()))
 }

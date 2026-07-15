@@ -18,15 +18,16 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::{
-    auth::{require_openai_auth, require_worker_auth},
+    auth::{require_openai_auth, require_openai_auth_for_priority, require_worker_auth},
     error::{AppError, AppResult},
-    protocol::{InferenceError, InferenceRequest, InternalReference, WireMessage},
+    protocol::{InferenceError, InferenceRequest, InternalReference, Priority, WireMessage},
     state::{AppState, PendingRequest, WorkerEvent},
     workers::worker_ws_handler,
 };
 
 const TARGET_WORKER_HEADER: &str = "x-fish-worker-id";
 const TARGET_WORKER_HEADER_ALIAS: &str = "x-worker-id";
+const PRIORITY_HEADER: &str = "x-fish-priority";
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
@@ -363,7 +364,8 @@ async fn fish_tts(
     headers: HeaderMap,
     Json(request): Json<FishTtsRequest>,
 ) -> AppResult<Response> {
-    require_openai_auth(&headers, &state.config)?;
+    let priority = priority_from_headers(&headers)?;
+    require_openai_auth_for_priority(&headers, &state.config, priority)?;
     let target_worker_id = target_worker_id_from_headers(&headers)?;
 
     let mapped = AudioSpeechRequest {
@@ -375,7 +377,7 @@ async fn fish_tts(
         extra: request.extra,
     };
 
-    handle_speech(state, mapped, "fish_tts", target_worker_id).await
+    handle_speech(state, mapped, "fish_tts", target_worker_id, priority).await
 }
 
 async fn audio_speech(
@@ -383,9 +385,10 @@ async fn audio_speech(
     headers: HeaderMap,
     Json(request): Json<AudioSpeechRequest>,
 ) -> AppResult<Response> {
-    require_openai_auth(&headers, &state.config)?;
+    let priority = priority_from_headers(&headers)?;
+    require_openai_auth_for_priority(&headers, &state.config, priority)?;
     let target_worker_id = target_worker_id_from_headers(&headers)?;
-    handle_speech(state, request, "audio_speech", target_worker_id).await
+    handle_speech(state, request, "audio_speech", target_worker_id, priority).await
 }
 
 async fn handle_speech(
@@ -393,6 +396,7 @@ async fn handle_speech(
     request: AudioSpeechRequest,
     api_kind: &str,
     target_worker_id: Option<String>,
+    priority: Priority,
 ) -> AppResult<Response> {
     let started = Instant::now();
     if request.input.trim().is_empty() {
@@ -427,6 +431,7 @@ async fn handle_speech(
         inline_references = reference_summary.inline,
         inline_audio_bytes = reference_summary.inline_audio_bytes,
         target_worker_id = ?target_worker_id,
+        priority = %priority.as_str(),
         manager_reference_ms,
         "accepted speech request"
     );
@@ -439,6 +444,7 @@ async fn handle_speech(
         manager_reference_ms,
         reference_summary,
         target_worker_id,
+        priority,
     };
 
     if stream_response {
@@ -532,6 +538,19 @@ fn target_worker_id_from_headers(headers: &HeaderMap) -> AppResult<Option<String
     }
 
     Ok(Some(worker_id))
+}
+
+fn priority_from_headers(headers: &HeaderMap) -> AppResult<Priority> {
+    let Some(value) = headers.get(PRIORITY_HEADER) else {
+        return Ok(Priority::default());
+    };
+
+    let value = value
+        .to_str()
+        .map_err(|_| AppError::BadRequest("priority header must be valid UTF-8".to_string()))?;
+    Priority::parse(value).ok_or_else(|| {
+        AppError::BadRequest("priority header must be one of v1, v2, v3, v4".to_string())
+    })
 }
 
 fn normalized_payload(request: &AudioSpeechRequest) -> AppResult<Value> {
@@ -814,7 +833,7 @@ async fn dispatch_once(
         let worker = if let Some(worker_id) = &trace.target_worker_id {
             state.select_worker_by_id(worker_id).await?
         } else {
-            state.select_worker(exclude).await?
+            state.select_worker(exclude, trace.priority).await?
         };
         let request_id = format!("req_{}", Uuid::new_v4().simple());
         let (tx, rx) = mpsc::channel(128);
@@ -832,6 +851,7 @@ async fn dispatch_once(
         let message = WireMessage::InferenceRequest(InferenceRequest {
             request_id: request_id.clone(),
             api_kind: api_kind.clone(),
+            priority: trace.priority,
             payload: payload.clone(),
             references: references.clone(),
             stream,
@@ -843,6 +863,7 @@ async fn dispatch_once(
             connection_id = %worker.connection_id,
             request_id = %request_id,
             api_kind = %api_kind,
+            priority = %trace.priority.as_str(),
             stream,
             references = reference_summary.total,
             metadata_references = reference_summary.metadata,
@@ -949,6 +970,7 @@ struct SpeechTrace {
     manager_reference_ms: f64,
     reference_summary: ReferenceSummary,
     target_worker_id: Option<String>,
+    priority: Priority,
 }
 
 #[derive(Debug, Clone)]
@@ -985,6 +1007,7 @@ fn log_speech_completed(
 ) {
     tracing::info!(
         api_kind = %trace.api_kind,
+        priority = %trace.priority.as_str(),
         request_id = %dispatch.request_id(),
         worker_id = %dispatch.worker_id(),
         stream = trace.stream,
