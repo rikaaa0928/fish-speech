@@ -71,6 +71,7 @@ class Config:
     api_server_half: bool
     api_server_workers: int
     api_server_max_text_length: int
+    api_server_speed_method: str
     api_server_references_dir: Path
     heartbeat_interval_seconds: float
     manage_api_server: bool
@@ -94,6 +95,14 @@ class Config:
         worker_token = os.environ["WORKER_TOKEN"]
         worker_id = os.getenv("WORKER_ID") or f"worker-{uuid.uuid4().hex[:12]}"
         v3_queue_limit = max(0, env_int("API_SERVER_MAX_QUEUED_REQUESTS", 1))
+        api_server_speed_method = os.getenv(
+            "API_SERVER_SPEED_METHOD", "librosa"
+        ).strip()
+        if api_server_speed_method not in {"librosa", "linear"}:
+            raise ValueError(
+                "API_SERVER_SPEED_METHOD must be either 'librosa' or 'linear'"
+            )
+
         return cls(
             manager_url=manager_url,
             worker_token=worker_token,
@@ -117,6 +126,7 @@ class Config:
             api_server_half=env_bool("API_SERVER_HALF", False),
             api_server_workers=max(1, env_int("API_SERVER_WORKERS", 1)),
             api_server_max_text_length=max(0, env_int("API_SERVER_MAX_TEXT_LENGTH", 0)),
+            api_server_speed_method=api_server_speed_method,
             api_server_references_dir=Path(os.getenv("API_SERVER_REFERENCES_DIR", "references")),
             heartbeat_interval_seconds=float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "5")),
             manage_api_server=env_bool("WORKER_MANAGE_API_SERVER", True),

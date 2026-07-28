@@ -1,6 +1,7 @@
 import torch
 from loguru import logger
 
+from fish_speech.audio_processing import SpeedMethod
 from fish_speech.inference_engine import TTSInferenceEngine
 from fish_speech.models.dac.inference import load_model as load_decoder_model
 from fish_speech.models.text2semantic.inference import launch_thread_safe_queue
@@ -18,6 +19,7 @@ class ModelManager:
         llama_checkpoint_path: str,
         decoder_checkpoint_path: str,
         decoder_config_name: str,
+        speed_method: SpeedMethod = "librosa",
     ) -> None:
 
         self.mode = mode
@@ -47,6 +49,7 @@ class ModelManager:
             decoder_model=self.decoder_model,
             precision=self.precision,
             compile=self.compile,
+            speed_method=speed_method,
         )
 
         # Warm up the models

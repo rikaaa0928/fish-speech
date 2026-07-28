@@ -124,6 +124,8 @@ class Worker:
                 str(self.config.api_server_workers),
                 "--max-text-length",
                 str(self.config.api_server_max_text_length),
+                "--speed-method",
+                self.config.api_server_speed_method,
             ]
             if self.config.api_server_compile:
                 args.append("--compile")

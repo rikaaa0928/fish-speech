@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from loguru import logger
 
+from fish_speech.audio_processing import SpeedMethod, adjust_speed
 from fish_speech.inference_engine.reference_loader import ReferenceLoader
 from fish_speech.inference_engine.utils import InferenceResult, wav_chunk_header
 from fish_speech.inference_engine.vq_manager import VQManager
@@ -27,14 +28,20 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         decoder_model: DAC,
         precision: torch.dtype,
         compile: bool,
+        speed_method: SpeedMethod = "librosa",
     ) -> None:
 
         super().__init__()
+
+        if speed_method not in ("librosa", "linear"):
+            raise ValueError(f"Unsupported speed method: {speed_method}")
 
         self.llama_queue = llama_queue
         self.decoder_model = decoder_model
         self.precision = precision
         self.compile = compile
+        self.speed_method = speed_method
+        logger.info(f"Audio speed adjustment method: {speed_method}")
 
     @torch.inference_mode()
     def inference(self, req: ServeTTSRequest) -> Generator[InferenceResult, None, None]:
@@ -109,6 +116,11 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 segment = self.get_audio_segment(result)
 
                 if req.streaming:  # Used only by the API server
+                    segment = adjust_speed(
+                        segment,
+                        req.effective_speed,
+                        method=self.speed_method,
+                    )
                     yield InferenceResult(
                         code="segment",
                         audio=(sample_rate, segment),
@@ -133,6 +145,12 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         else:
             # Streaming or not, return the final audio
             audio = np.concatenate(segments, axis=0)
+            if not req.streaming:
+                audio = adjust_speed(
+                    audio,
+                    req.effective_speed,
+                    method=self.speed_method,
+                )
             yield InferenceResult(
                 code="final",
                 audio=(sample_rate, audio),

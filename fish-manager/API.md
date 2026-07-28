@@ -155,6 +155,7 @@ curl -X POST http://127.0.0.1:8080/v1/audio/speech \
     "voice": "speaker_a",
     "response_format": "wav",
     "stream": false,
+    "speed": 1.25,
     "temperature": 0.8,
     "top_p": 0.8,
     "max_new_tokens": 1024
@@ -215,6 +216,7 @@ curl -X POST http://127.0.0.1:8080/v1/audio/speech \
 | `references` | array | 否 | 内联参考音频列表 |
 | `response_format` | string | 否 | 输出格式，例如 `wav`、`mp3`、`flac` |
 | `stream` | boolean | 否 | 是否流式返回，默认 `false` |
+| `speed` | number | 否 | 语速倍率，范围 `0.5`–`2.0`，默认 `1.0` |
 | 其他字段 | any | 否 | 原样透传给 worker |
 
 `references[]` 字段：
@@ -242,6 +244,7 @@ curl -X POST http://127.0.0.1:8080/v1/tts \
     "reference_id": "speaker_a",
     "format": "wav",
     "streaming": false,
+    "prosody": {"speed": 1.25},
     "temperature": 0.8,
     "top_p": 0.8
   }'
@@ -256,6 +259,8 @@ curl -X POST http://127.0.0.1:8080/v1/tts \
 | `references` | `references` |
 | `format` | `response_format` |
 | `streaming` | `stream` |
+| `prosody.speed` | Fish Audio 兼容语速倍率（`0.5`–`2.0`） |
+| `speed` | 顶层语速倍率兼容写法，优先于 `prosody.speed` |
 | 其他字段 | 原样透传给 worker |
 
 `/v1/tts` 同样支持 `X-Fish-Worker-ID` 指定 worker。

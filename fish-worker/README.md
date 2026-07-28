@@ -87,6 +87,7 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 - `API_SERVER_HALF`: starts Fish API server with `--half`, default `0`; default bf16 was more stable in testing.
 - `API_SERVER_WORKERS`: Uvicorn worker count, default `1`. Each worker loads its own model copy.
 - `API_SERVER_MAX_TEXT_LENGTH`: Fish API server text length guard, default `0` disabled. Use around `240` on 24GB GPUs if you want a conservative guard.
+- `API_SERVER_SPEED_METHOD`: speed adjustment implementation. `librosa` is the default and preserves pitch; `linear` matches SGLang-Omni's lightweight interpolation and changes pitch.
 - `API_SERVER_REFERENCES_DIR`: directory that Fish API server reads as `references/`, default `references` relative to the repository root. Docker mounts this at `/app/references`.
 - `PYTORCH_ALLOC_CONF`: PyTorch CUDA allocator setting, default `expandable_segments:True`.
 

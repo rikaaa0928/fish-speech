@@ -21,6 +21,16 @@ Common options:
 - `--half`: use fp16 mode
 - `--api-key`: require bearer token authentication
 - `--workers`: set worker process count
+- `--speed-method`: select `librosa` (default, pitch-preserving) or `linear`
+  (SGLang-Omni-compatible interpolation that also changes pitch)
+
+For example, to match SGLang-Omni's lightweight speed adjustment:
+
+```bash
+python tools/api_server.py \
+  --listen 0.0.0.0:8080 \
+  --speed-method linear
+```
 
 ### Health check
 

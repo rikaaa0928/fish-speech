@@ -49,6 +49,9 @@ fi
 if [ -z "${API_SERVER_MAX_TEXT_LENGTH+x}" ]; then
   export API_SERVER_MAX_TEXT_LENGTH=0
 fi
+if [ -z "${API_SERVER_SPEED_METHOD+x}" ]; then
+  export API_SERVER_SPEED_METHOD=librosa
+fi
 if [ -z "${API_SERVER_REFERENCES_DIR+x}" ]; then
   export API_SERVER_REFERENCES_DIR=references
 fi

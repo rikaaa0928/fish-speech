@@ -78,6 +78,11 @@ class ServeReferenceAudio(BaseModel):
         return f"ServeReferenceAudio(text={self.text!r}, audio_size={len(self.audio)})"
 
 
+class ServeTTSProsody(BaseModel):
+    # Match the Fish Audio API's speech speed multiplier.
+    speed: Annotated[float, Field(ge=0.5, le=2.0, strict=True)] = 1.0
+
+
 class ServeTTSRequest(BaseModel):
     text: str
     chunk_length: Annotated[int, conint(ge=100, le=1000, strict=True)] = 200
@@ -85,6 +90,11 @@ class ServeTTSRequest(BaseModel):
     format: Literal["wav", "pcm", "mp3", "opus"] = "wav"
     # Latency mode (used by api.fish.audio; "normal" or "balanced")
     latency: Literal["normal", "balanced"] = "normal"
+    # Fish Audio-compatible prosody controls.
+    prosody: ServeTTSProsody = Field(default_factory=ServeTTSProsody)
+    # Convenience alias used by OpenAI-style clients. When set, this takes
+    # precedence over prosody.speed.
+    speed: Annotated[float, Field(ge=0.5, le=2.0, strict=True)] | None = None
     # References audios for in-context learning
     references: list[ServeReferenceAudio] = []
     # Reference id
@@ -105,6 +115,10 @@ class ServeTTSRequest(BaseModel):
     class Config:
         # Allow arbitrary types for pytorch related types
         arbitrary_types_allowed = True
+
+    @property
+    def effective_speed(self) -> float:
+        return self.speed if self.speed is not None else self.prosody.speed
 
 
 class AddReferenceRequest(BaseModel):

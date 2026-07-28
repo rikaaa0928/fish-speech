@@ -85,6 +85,12 @@ def parse_args():
         help="Used in api.fish.audio/v1/tts",
     )
     parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Speech speed multiplier (0.5 to 2.0, default: 1.0)",
+    )
+    parser.add_argument(
         "--max_new_tokens",
         type=int,
         default=1024,
@@ -169,6 +175,7 @@ if __name__ == "__main__":
         "reference_id": idstr,
         "format": args.format,
         "latency": args.latency,
+        "prosody": {"speed": args.speed},
         "max_new_tokens": args.max_new_tokens,
         "chunk_length": args.chunk_length,
         "top_p": args.top_p,
