@@ -135,7 +135,7 @@ class Config:
             cuda_probe_timeout_seconds=float(os.getenv("CUDA_PROBE_TIMEOUT_SECONDS", "10")),
             gpu_watchdog_failures_before_exit=max(1, env_int("GPU_WATCHDOG_FAILURES_BEFORE_EXIT", 2)),
             api_server_watchdog_failures_before_restart=max(
-                1, env_int("API_SERVER_WATCHDOG_FAILURES_BEFORE_RESTART", 3)
+                1, env_int("API_SERVER_WATCHDOG_FAILURES_BEFORE_RESTART", 10)
             ),
             api_server_restart_cooldown_seconds=float(os.getenv("API_SERVER_RESTART_COOLDOWN_SECONDS", "30")),
         )
