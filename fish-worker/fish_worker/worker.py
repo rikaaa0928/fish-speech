@@ -104,6 +104,7 @@ class Worker:
                 await asyncio.sleep(5)
 
     async def start_api_server(self) -> asyncio.subprocess.Process:
+        self.last_api_server_restart_at = time.monotonic()
         cmd = os.getenv("API_SERVER_COMMAND")
         if cmd:
             args = ["bash", "-lc", cmd]
@@ -356,6 +357,13 @@ class Worker:
             self.api_server_watchdog_failures = 0
 
     async def record_api_server_failure(self, detail: str) -> None:
+        now = time.monotonic()
+        if (
+            self.last_api_server_restart_at is not None
+            and now - self.last_api_server_restart_at < 60
+        ):
+            return
+
         self.api_server_watchdog_failures += 1
         log(
             "Fish API server watchdog failure",
