@@ -200,7 +200,8 @@ class Worker:
             elif msg_type == "restart_worker":
                 reason = message.get("data", {}).get("reason", "manager request")
                 log("manager requested worker process restart", reason=reason)
-                self.stop_event.set()
+                import sys
+                sys.exit(0)
 
     def worker_hello(self) -> dict[str, Any]:
         gpu = detect_gpu()
