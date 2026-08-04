@@ -9,6 +9,7 @@ pub struct Config {
     pub bind_addr: SocketAddr,
     pub openai_api_keys: Arc<HashMap<String, Priority>>,
     pub worker_token: String,
+    pub admin_token: String,
     pub sqlite_path: PathBuf,
     pub blob_local_dir: PathBuf,
     pub retry_on_worker_overload: bool,
@@ -35,6 +36,11 @@ impl Config {
             bail!("WORKER_TOKEN must not be empty");
         }
 
+        let admin_token = env::var("ADMIN_TOKEN").unwrap_or_else(|_| "admin".to_string());
+        if admin_token.trim().is_empty() {
+            bail!("ADMIN_TOKEN must not be empty");
+        }
+
         let sqlite_path = env::var("SQLITE_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("./fish-manager-data/manager.sqlite3"));
@@ -57,6 +63,7 @@ impl Config {
             bind_addr,
             openai_api_keys: Arc::new(openai_api_keys),
             worker_token,
+            admin_token,
             sqlite_path,
             blob_local_dir,
             retry_on_worker_overload,

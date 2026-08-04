@@ -66,6 +66,8 @@ pub enum WireMessage {
     InferenceDone(InferenceDone),
     InferenceError(InferenceError),
     CancelRequest(CancelRequest),
+    RestartApiServer(RestartApiServer),
+    RestartWorker(RestartWorker),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,4 +175,16 @@ pub struct InferenceError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelRequest {
     pub request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestartApiServer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestartWorker {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }

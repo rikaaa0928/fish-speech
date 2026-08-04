@@ -18,9 +18,9 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::{
-    auth::{require_openai_auth, require_openai_auth_for_priority, require_worker_auth},
+    auth::{require_admin_auth, require_openai_auth, require_openai_auth_for_priority, require_worker_auth},
     error::{AppError, AppResult},
-    protocol::{InferenceError, InferenceRequest, InternalReference, Priority, WireMessage},
+    protocol::{InferenceError, InferenceRequest, InternalReference, Priority, RestartApiServer, RestartWorker, WireMessage},
     state::{AppState, PendingRequest, WorkerEvent},
     workers::worker_ws_handler,
 };
@@ -47,6 +47,15 @@ pub fn build_router(state: AppState) -> Router {
             get(get_internal_voice_audio),
         )
         .route("/internal/workers/ws", get(worker_ws_handler))
+        .route("/internal/admin/workers", get(admin_list_workers))
+        .route(
+            "/internal/admin/workers/:worker_id/restart_api",
+            post(admin_restart_api),
+        )
+        .route(
+            "/internal/admin/workers/:worker_id/restart_worker",
+            post(admin_restart_worker),
+        )
         .with_state(state)
 }
 
@@ -92,6 +101,63 @@ async fn list_workers(State(state): State<AppState>, headers: HeaderMap) -> AppR
     }
 
     Ok(Json(json!({ "data": workers })))
+}
+
+async fn admin_list_workers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<Value>> {
+    require_admin_auth(&headers, &state.config)?;
+
+    let now = Utc::now();
+    let mut workers = Vec::new();
+    for entry in state.workers.iter() {
+        let handle = entry.value().clone();
+        let mut status = handle.status.read().await.clone();
+        status.manager_inflight = handle.manager_inflight.load(Ordering::Relaxed);
+        status.heartbeat_age_ms = (now - status.last_heartbeat_at).num_milliseconds().max(0);
+        workers.push(status);
+    }
+
+    Ok(Json(json!({ "data": workers })))
+}
+
+async fn admin_restart_api(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(worker_id): Path<String>,
+) -> AppResult<Json<Value>> {
+    require_admin_auth(&headers, &state.config)?;
+
+    let worker = state.select_worker_by_id(&worker_id).await?;
+    let msg = WireMessage::RestartApiServer(RestartApiServer {
+        reason: Some("admin requested restart".to_string()),
+    });
+
+    if worker.tx.send(msg).await.is_err() {
+        return Err(AppError::Internal(anyhow::anyhow!("failed to send restart command to worker")));
+    }
+
+    Ok(Json(json!({ "success": true, "message": "Restart API server command sent" })))
+}
+
+async fn admin_restart_worker(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(worker_id): Path<String>,
+) -> AppResult<Json<Value>> {
+    require_admin_auth(&headers, &state.config)?;
+
+    let worker = state.select_worker_by_id(&worker_id).await?;
+    let msg = WireMessage::RestartWorker(RestartWorker {
+        reason: Some("admin requested restart".to_string()),
+    });
+
+    if worker.tx.send(msg).await.is_err() {
+        return Err(AppError::Internal(anyhow::anyhow!("failed to send restart command to worker")));
+    }
+
+    Ok(Json(json!({ "success": true, "message": "Restart worker command sent" })))
 }
 
 async fn add_reference(

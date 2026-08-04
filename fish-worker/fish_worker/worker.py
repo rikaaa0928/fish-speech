@@ -187,11 +187,20 @@ class Worker:
             if isinstance(raw, str):
                 continue
             message = unpack_msg(raw)
-            if message.get("type") == "inference_request":
+            msg_type = message.get("type")
+            if msg_type == "inference_request":
                 data = message["data"]
                 asyncio.create_task(self.handle_inference(ws, data))
-            elif message.get("type") == "cancel_request":
+            elif msg_type == "cancel_request":
                 log("cancel requested", data=message.get("data"))
+            elif msg_type == "restart_api_server":
+                reason = message.get("data", {}).get("reason", "manager request")
+                log("manager requested API server restart", reason=reason)
+                asyncio.create_task(self.restart_api_server(reason=reason, force=True))
+            elif msg_type == "restart_worker":
+                reason = message.get("data", {}).get("reason", "manager request")
+                log("manager requested worker process restart", reason=reason)
+                self.stop_event.set()
 
     def worker_hello(self) -> dict[str, Any]:
         gpu = detect_gpu()
@@ -377,11 +386,12 @@ class Worker:
             return
         await self.restart_api_server(reason=detail)
 
-    async def restart_api_server(self, *, reason: str) -> None:
+    async def restart_api_server(self, *, reason: str, force: bool = False) -> None:
         async with self.api_server_restart_lock:
             now = time.monotonic()
             if (
-                self.last_api_server_restart_at is not None
+                not force
+                and self.last_api_server_restart_at is not None
                 and now - self.last_api_server_restart_at < self.config.api_server_restart_cooldown_seconds
             ):
                 return

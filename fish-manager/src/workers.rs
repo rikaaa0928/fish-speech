@@ -299,7 +299,9 @@ async fn process_worker_message(state: &AppState, handle: &WorkerHandle, message
         }
         WireMessage::WorkerHello(_)
         | WireMessage::InferenceRequest(_)
-        | WireMessage::CancelRequest(_) => {
+        | WireMessage::CancelRequest(_)
+        | WireMessage::RestartApiServer(_)
+        | WireMessage::RestartWorker(_) => {
             tracing::warn!(
                 worker_id = %handle.worker_id,
                 connection_id = %handle.connection_id,
