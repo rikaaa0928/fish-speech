@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod error;
+mod metrics;
 mod protocol;
 mod routes;
 mod state;
@@ -32,7 +33,13 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Arc::new(Config::from_env()?);
     let voice_store = Arc::new(VoiceStore::from_config(&config).await?);
-    let state = AppState::new(config.clone(), voice_store);
+    let metrics_store = Arc::new(crate::metrics::MetricsStore::new(60 * 2)); // 2 hours of history (1 minute ticks)
+    let state = AppState::new(config.clone(), voice_store, metrics_store.clone());
+    
+    let state_clone = Arc::new(state.clone());
+    tokio::spawn(async move {
+        crate::metrics::metrics_ticker(state_clone, metrics_store).await;
+    });
 
     let app: Router = build_router(state)
         .layer(TraceLayer::new_for_http())

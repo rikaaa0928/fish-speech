@@ -367,5 +367,8 @@ fn status_from_hello(hello: WorkerHello, connection_id: String) -> WorkerStatus 
         last_heartbeat_at: now,
         heartbeat_age_ms: 0,
         manager_inflight: 0,
+        total_completed_tasks: 0,
+        total_completed_chars: 0,
+        total_processing_time_sec: 0.0,
     }
 }

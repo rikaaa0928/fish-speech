@@ -24,15 +24,17 @@ pub struct AppState {
     pub voice_store: Arc<VoiceStore>,
     pub workers: Arc<DashMap<String, WorkerHandle>>,
     pub pending: Arc<DashMap<String, PendingRequest>>,
+    pub metrics_store: Arc<crate::metrics::MetricsStore>,
 }
 
 impl AppState {
-    pub fn new(config: Arc<Config>, voice_store: Arc<VoiceStore>) -> Self {
+    pub fn new(config: Arc<Config>, voice_store: Arc<VoiceStore>, metrics_store: Arc<crate::metrics::MetricsStore>) -> Self {
         Self {
             config,
             voice_store,
             workers: Arc::new(DashMap::new()),
             pending: Arc::new(DashMap::new()),
+            metrics_store,
         }
     }
 
@@ -179,6 +181,9 @@ pub struct WorkerStatus {
     pub last_heartbeat_at: DateTime<Utc>,
     pub heartbeat_age_ms: i64,
     pub manager_inflight: u32,
+    pub total_completed_tasks: u64,
+    pub total_completed_chars: u64,
+    pub total_processing_time_sec: f64,
 }
 
 impl WorkerStatus {
@@ -196,6 +201,9 @@ impl WorkerStatus {
         self.gpu_utilization_percent = heartbeat.gpu_utilization_percent;
         self.ewma_latency_ms = heartbeat.ewma_latency_ms;
         self.last_error = heartbeat.last_error;
+        self.total_completed_tasks = heartbeat.total_completed_tasks;
+        self.total_completed_chars = heartbeat.total_completed_chars;
+        self.total_processing_time_sec = heartbeat.total_processing_time_sec;
         self.last_heartbeat_at = Utc::now();
         self.heartbeat_age_ms = 0;
     }

@@ -63,6 +63,11 @@ class Worker:
         self.stop_event = asyncio.Event()
         self.api_server_process: asyncio.subprocess.Process | None = None
 
+        # Metrics for monitoring
+        self.total_completed_tasks = 0
+        self.total_completed_chars = 0
+        self.total_processing_time_sec = 0.0
+
     @property
     def local_queued(self) -> int:
         return sum(len(queue) for queue in self.priority_queues.values())
@@ -248,6 +253,9 @@ class Worker:
                     "gpu_utilization_percent": health.gpu.get("gpu_utilization_percent"),
                     "ewma_latency_ms": self.ewma_latency_ms,
                     "last_error": self.last_error,
+                    "total_completed_tasks": self.total_completed_tasks,
+                    "total_completed_chars": self.total_completed_chars,
+                    "total_processing_time_sec": self.total_processing_time_sec,
                 },
             )
             await asyncio.sleep(self.config.heartbeat_interval_seconds)
@@ -580,10 +588,17 @@ class Worker:
 
             result = await call_api_server(self, ws, request_id, payload, stream=payload["streaming"])
             if result is not None:
-                total_ms = (time.monotonic() - started) * 1000
+                total_time_sec = time.monotonic() - started
+                total_ms = total_time_sec * 1000
                 timings = dict(result["timings"])
                 timings["total_ms"] = total_ms
                 timings["reference_ms"] = reference_ms
+                
+                # Update metrics
+                self.total_completed_tasks += 1
+                self.total_completed_chars += len(input_text)
+                self.total_processing_time_sec += total_time_sec
+
                 log(
                     "inference completed",
                     request_id=request_id,

@@ -48,6 +48,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/internal/workers/ws", get(worker_ws_handler))
         .route("/internal/admin/workers", get(admin_list_workers))
+        .route("/internal/admin/metrics", get(admin_get_metrics))
         .route(
             "/internal/admin/workers/:worker_id/restart_api",
             post(admin_restart_api),
@@ -1149,4 +1150,11 @@ fn decode_audio(input: &str) -> AppResult<Vec<u8>> {
     STANDARD
         .decode(payload)
         .map_err(|_| AppError::BadRequest("reference audio is not valid base64".to_string()))
+}
+
+async fn admin_get_metrics(
+    State(state): State<AppState>,
+) -> AppResult<Json<Vec<crate::metrics::MetricsSnapshot>>> {
+    let history = state.metrics_store.get_history().await;
+    Ok(Json(history))
 }

@@ -107,6 +107,12 @@ pub struct Heartbeat {
     pub gpu_utilization_percent: Option<f32>,
     pub ewma_latency_ms: Option<f64>,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub total_completed_tasks: u64,
+    #[serde(default)]
+    pub total_completed_chars: u64,
+    #[serde(default)]
+    pub total_processing_time_sec: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
