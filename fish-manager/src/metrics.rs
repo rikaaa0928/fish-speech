@@ -9,6 +9,7 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::state::AppState;
+use crate::protocol::{Priority, PriorityChars, PriorityCounts};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MetricsSnapshot {
@@ -25,6 +26,12 @@ pub struct MetricsSnapshot {
     // Per-worker speed (chars/min excluding idle time)
     // worker_id -> speed
     pub worker_speeds: HashMap<String, f64>,
+
+    // Current workload aggregated across all connected workers.
+    pub inflight_by_priority: PriorityCounts,
+    pub queued_by_priority: PriorityCounts,
+    pub inflight_chars_by_priority: PriorityChars,
+    pub queued_chars_by_priority: PriorityChars,
 }
 
 pub struct MetricsStore {
@@ -68,6 +75,10 @@ pub async fn metrics_ticker(app_state: Arc<AppState>, metrics_store: Arc<Metrics
         let mut current_total_tasks = 0;
         let mut current_total_chars = 0;
         let mut current_worker_speeds = HashMap::new();
+        let mut inflight_by_priority = PriorityCounts::new();
+        let mut queued_by_priority = PriorityCounts::new();
+        let mut inflight_chars_by_priority = PriorityChars::new();
+        let mut queued_chars_by_priority = PriorityChars::new();
         
         let mut current_worker_stats = HashMap::new();
         
@@ -83,6 +94,23 @@ pub async fn metrics_ticker(app_state: Arc<AppState>, metrics_store: Arc<Metrics
             
             current_total_tasks += tasks;
             current_total_chars += chars;
+
+            for priority in Priority::ALL {
+                *inflight_by_priority.entry(priority).or_default() +=
+                    status.inflight_by_priority.get(&priority).copied().unwrap_or(0);
+                *queued_by_priority.entry(priority).or_default() +=
+                    status.queued_by_priority.get(&priority).copied().unwrap_or(0);
+                *inflight_chars_by_priority.entry(priority).or_default() += status
+                    .inflight_chars_by_priority
+                    .get(&priority)
+                    .copied()
+                    .unwrap_or(0);
+                *queued_chars_by_priority.entry(priority).or_default() += status
+                    .queued_chars_by_priority
+                    .get(&priority)
+                    .copied()
+                    .unwrap_or(0);
+            }
             
             current_worker_stats.insert(worker_id.clone(), (chars, active_time));
             
@@ -125,6 +153,10 @@ pub async fn metrics_ticker(app_state: Arc<AppState>, metrics_store: Arc<Metrics
             tasks_per_min,
             chars_per_min,
             worker_speeds: current_worker_speeds,
+            inflight_by_priority,
+            queued_by_priority,
+            inflight_chars_by_priority,
+            queued_chars_by_priority,
         };
         
         metrics_store.add_snapshot(snapshot).await;

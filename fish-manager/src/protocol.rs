@@ -55,6 +55,7 @@ impl Priority {
 }
 
 pub type PriorityCounts = BTreeMap<Priority, u32>;
+pub type PriorityChars = BTreeMap<Priority, u64>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
@@ -92,12 +93,20 @@ pub struct WorkerHello {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Heartbeat {
     pub worker_id: String,
+    #[serde(default)]
+    pub workload_metrics_version: u32,
     pub ready: bool,
     pub sglang_healthy: bool,
     pub inflight: u32,
     pub queued: u32,
     #[serde(default)]
     pub queued_by_priority: PriorityCounts,
+    #[serde(default)]
+    pub inflight_by_priority: PriorityCounts,
+    #[serde(default)]
+    pub queued_chars_by_priority: PriorityChars,
+    #[serde(default)]
+    pub inflight_chars_by_priority: PriorityChars,
     pub max_running_requests: u32,
     pub max_queued_requests: u32,
     #[serde(default)]
@@ -193,4 +202,35 @@ pub struct RestartApiServer {
 pub struct RestartWorker {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_accepts_workers_without_character_metrics() {
+        let heartbeat: Heartbeat = serde_json::from_value(serde_json::json!({
+            "worker_id": "legacy-worker",
+            "ready": true,
+            "sglang_healthy": true,
+            "inflight": 1,
+            "queued": 2,
+            "queued_by_priority": { "v3": 2 },
+            "max_running_requests": 2,
+            "max_queued_requests": 8,
+            "max_queued_requests_by_priority": {},
+            "vram_used_mb": null,
+            "vram_free_mb": null,
+            "gpu_utilization_percent": null,
+            "ewma_latency_ms": null,
+            "last_error": null
+        }))
+        .expect("legacy heartbeat should deserialize");
+
+        assert!(heartbeat.inflight_by_priority.is_empty());
+        assert!(heartbeat.queued_chars_by_priority.is_empty());
+        assert!(heartbeat.inflight_chars_by_priority.is_empty());
+        assert_eq!(heartbeat.workload_metrics_version, 0);
+    }
 }

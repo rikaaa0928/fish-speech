@@ -340,6 +340,7 @@ fn status_from_hello(hello: WorkerHello, connection_id: String) -> WorkerStatus 
     let now = Utc::now();
     WorkerStatus {
         worker_id: hello.worker_id,
+        workload_metrics_version: 0,
         connection_id,
         version: hello.version,
         model_id: hello.model_id,
@@ -358,6 +359,9 @@ fn status_from_hello(hello: WorkerHello, connection_id: String) -> WorkerStatus 
         inflight: 0,
         queued: 0,
         queued_by_priority: Default::default(),
+        inflight_by_priority: Default::default(),
+        queued_chars_by_priority: Default::default(),
+        inflight_chars_by_priority: Default::default(),
         vram_used_mb: None,
         vram_free_mb: None,
         gpu_utilization_percent: None,

@@ -34,6 +34,7 @@ from fish_worker.reference_cache import ensure_api_reference
 class QueuedRequest:
     request_id: str
     priority: Priority
+    input_chars: int
     future: asyncio.Future[bool]
 
 
@@ -41,6 +42,7 @@ class Worker:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.local_inflight = 0
+        self.active_requests: dict[str, tuple[Priority, int]] = {}
         self.priority_queues: dict[Priority, list[QueuedRequest]] = {
             priority: [] for priority in PRIORITIES
         }
@@ -74,6 +76,28 @@ class Worker:
 
     def queued_by_priority(self) -> dict[Priority, int]:
         return {priority: len(self.priority_queues[priority]) for priority in PRIORITIES}
+
+    def queued_chars_by_priority(self) -> dict[Priority, int]:
+        return {
+            priority: sum(request.input_chars for request in self.priority_queues[priority])
+            for priority in PRIORITIES
+        }
+
+    def inflight_by_priority(self) -> dict[Priority, int]:
+        return {
+            priority: sum(1 for active_priority, _ in self.active_requests.values() if active_priority is priority)
+            for priority in PRIORITIES
+        }
+
+    def inflight_chars_by_priority(self) -> dict[Priority, int]:
+        return {
+            priority: sum(
+                input_chars
+                for active_priority, input_chars in self.active_requests.values()
+                if active_priority is priority
+            )
+            for priority in PRIORITIES
+        }
 
     def max_queue_for_priority(self, priority: Priority) -> int:
         return self.config.api_server_max_queued_requests_by_priority.get(
@@ -238,11 +262,19 @@ class Worker:
                 "heartbeat",
                 {
                     "worker_id": self.config.worker_id,
+                    "workload_metrics_version": 1,
                     "ready": health.healthy,
                     "sglang_healthy": health.healthy,
                     "inflight": self.local_inflight,
                     "queued": self.local_queued,
                     "queued_by_priority": priority_map_to_wire(self.queued_by_priority()),
+                    "queued_chars_by_priority": priority_map_to_wire(
+                        self.queued_chars_by_priority()
+                    ),
+                    "inflight_by_priority": priority_map_to_wire(self.inflight_by_priority()),
+                    "inflight_chars_by_priority": priority_map_to_wire(
+                        self.inflight_chars_by_priority()
+                    ),
                     "max_running_requests": self.config.api_server_max_running_requests,
                     "max_queued_requests": self.config.api_server_max_queued_requests,
                     "max_queued_requests_by_priority": priority_map_to_wire(
@@ -427,10 +459,16 @@ class Worker:
             process.kill()
             await process.wait()
 
-    async def acquire_request_slot(self, request_id: str, priority: Priority) -> bool:
+    async def acquire_request_slot(
+        self,
+        request_id: str,
+        priority: Priority,
+        input_chars: int,
+    ) -> bool:
         async with self.capacity_condition:
             if self.can_start_immediately(priority):
                 self.local_inflight += 1
+                self.active_requests[request_id] = (priority, input_chars)
                 return True
 
             effective_queued = self.effective_queued_for_priority(priority)
@@ -452,7 +490,9 @@ class Worker:
                 return False
 
             future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-            self.priority_queues[priority].append(QueuedRequest(request_id, priority, future))
+            self.priority_queues[priority].append(
+                QueuedRequest(request_id, priority, input_chars, future)
+            )
             log(
                 "inference queued",
                 request_id=request_id,
@@ -482,8 +522,9 @@ class Worker:
                 item for item in queue if item.request_id != request_id or item.future is not future
             ]
 
-    async def release_request_slot(self) -> None:
+    async def release_request_slot(self, request_id: str) -> None:
         async with self.capacity_condition:
+            self.active_requests.pop(request_id, None)
             self.local_inflight = max(0, self.local_inflight - 1)
             self.start_queued_requests_locked()
 
@@ -498,6 +539,10 @@ class Worker:
                         continue
 
                     self.local_inflight += 1
+                    self.active_requests[queued.request_id] = (
+                        queued.priority,
+                        queued.input_chars,
+                    )
                     queued.future.set_result(True)
                     log(
                         "queued inference admitted",
@@ -518,8 +563,10 @@ class Worker:
         request_id = request["request_id"]
         api_kind = request.get("api_kind") or "unknown"
         priority = Priority.parse(request.get("priority"))
+        raw_payload = request.get("payload") or {}
+        input_chars = len(raw_payload.get("text") or raw_payload.get("input") or "")
         started = time.monotonic()
-        slot_acquired = await self.acquire_request_slot(request_id, priority)
+        slot_acquired = await self.acquire_request_slot(request_id, priority, input_chars)
         if not slot_acquired:
             await send_error(ws, request_id, "overloaded", "worker overloaded", retryable=True)
             return
@@ -653,7 +700,7 @@ class Worker:
         finally:
             elapsed_ms = (time.monotonic() - started) * 1000
             self.update_ewma(elapsed_ms)
-            await self.release_request_slot()
+            await self.release_request_slot(request_id)
 
     def update_ewma(self, elapsed_ms: float) -> None:
         if self.ewma_latency_ms is None:

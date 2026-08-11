@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::{
     config::Config,
     error::{AppError, AppResult},
-    protocol::{Heartbeat, Priority, PriorityCounts, WireMessage},
+    protocol::{Heartbeat, Priority, PriorityChars, PriorityCounts, WireMessage},
     storage::VoiceStore,
 };
 
@@ -154,6 +154,7 @@ pub struct WorkerHandle {
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkerStatus {
     pub worker_id: String,
+    pub workload_metrics_version: u32,
     pub connection_id: String,
     pub version: String,
     pub model_id: String,
@@ -172,6 +173,9 @@ pub struct WorkerStatus {
     pub inflight: u32,
     pub queued: u32,
     pub queued_by_priority: PriorityCounts,
+    pub inflight_by_priority: PriorityCounts,
+    pub queued_chars_by_priority: PriorityChars,
+    pub inflight_chars_by_priority: PriorityChars,
     pub vram_used_mb: Option<u64>,
     pub vram_free_mb: Option<u64>,
     pub gpu_utilization_percent: Option<f32>,
@@ -188,11 +192,15 @@ pub struct WorkerStatus {
 
 impl WorkerStatus {
     pub fn apply_heartbeat(&mut self, heartbeat: Heartbeat) {
+        self.workload_metrics_version = heartbeat.workload_metrics_version;
         self.ready = heartbeat.ready;
         self.sglang_healthy = heartbeat.sglang_healthy;
         self.inflight = heartbeat.inflight;
         self.queued = heartbeat.queued;
         self.queued_by_priority = heartbeat.queued_by_priority;
+        self.inflight_by_priority = heartbeat.inflight_by_priority;
+        self.queued_chars_by_priority = heartbeat.queued_chars_by_priority;
+        self.inflight_chars_by_priority = heartbeat.inflight_chars_by_priority;
         self.max_running_requests = heartbeat.max_running_requests;
         self.max_queued_requests = heartbeat.max_queued_requests;
         self.max_queued_requests_by_priority = heartbeat.max_queued_requests_by_priority;
