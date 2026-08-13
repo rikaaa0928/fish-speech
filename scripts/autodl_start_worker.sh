@@ -9,6 +9,9 @@ REPO_REF="${REPO_REF:-}"
 AUTO_SETUP="${AUTO_SETUP:-1}"
 PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
 UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone}"
+AUTO_UPDATE="${AUTO_UPDATE:-1}"
+GIT_PULL_TIMEOUT_SECONDS="${GIT_PULL_TIMEOUT_SECONDS:-120}"
+NETWORK_TURBO_SCRIPT="${NETWORK_TURBO_SCRIPT:-/etc/network_turbo}"
 
 ENV_MANAGER_URL="${MANAGER_URL-}"
 ENV_WORKER_TOKEN="${WORKER_TOKEN-}"
@@ -158,10 +161,56 @@ ensure_setup() {
   fi
 }
 
+pull_repo() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${GIT_PULL_TIMEOUT_SECONDS}" git "$@"
+  else
+    git "$@"
+  fi
+}
+
+# Best-effort code update: never blocks startup. Pulls latest code using the
+# same network_turbo acceleration as autodl_setup.sh (enabled for the pull,
+# then scoped away in a subshell). Failures/timeouts only log a warning.
+git_update() {
+  local repo_root="$1"
+  local rc=0
+
+  if [ "${AUTO_UPDATE}" != "1" ]; then
+    log "AUTO_UPDATE=0; skipping git pull"
+    return 0
+  fi
+  if [ -n "${REPO_REF}" ]; then
+    log "REPO_REF is set; skipping git pull (pinned to ${REPO_REF})"
+    return 0
+  fi
+  if [ ! -d "${repo_root}/.git" ]; then
+    log "repo root ${repo_root} is not a git checkout; skipping git pull"
+    return 0
+  fi
+
+  log "updating code from remote (timeout=${GIT_PULL_TIMEOUT_SECONDS}s)"
+  if [ -f "${NETWORK_TURBO_SCRIPT}" ]; then
+    log "enabling AutoDL network turbo for git pull"
+    # source inside a subshell: proxy only applies to this pull, never leaks out
+    ( source "${NETWORK_TURBO_SCRIPT}"; pull_repo -C "${repo_root}" pull --ff-only --prune ) || rc=$?
+  else
+    pull_repo -C "${repo_root}" pull --ff-only --prune || rc=$?
+  fi
+
+  if [ "${rc}" -eq 0 ]; then
+    log "git pull succeeded"
+  else
+    log "warning: git pull failed or timed out (rc=${rc}); continuing with existing code"
+  fi
+  return 0
+}
+
 main() {
   local repo_root worker_dir
   repo_root="$(resolve_repo_root)"
   worker_dir="${repo_root}/fish-worker"
+  git_update "${repo_root}"
   ensure_setup "${repo_root}"
 
   cd "${worker_dir}"
