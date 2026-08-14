@@ -424,39 +424,45 @@ class WindowLimitedTransformer(Transformer):
         self,
         max_length: int,
         x_lens: Optional[Tensor] = None,
+        device: Optional[torch.device] = None,
     ) -> Tensor:
         """
         Make mask to form window limited attention.
         """
         if self.causal:
-            mask = torch.tril(torch.ones(max_length, max_length))
-            row_indices = torch.arange(max_length).view(-1, 1)
+            mask = torch.ones(
+                max_length, max_length, dtype=torch.bool, device=device
+            )
+            mask.tril_()
             window_size = self.window_size or max_length
-            valid_range = (row_indices - window_size + 1).clamp(min=0)
-            column_indices = torch.arange(max_length)
-            mask = (column_indices >= valid_range) & mask.bool()
+            if window_size < max_length:
+                mask.triu_(diagonal=1 - window_size)
         else:
             raise NotImplementedError
-        mask = mask.bool()[None, None]
-        return mask
+        return mask[None, None]
 
     def make_mask(
         self,
         max_length: int,
         x_lens: Optional[Tensor] = None,
+        device: Optional[torch.device] = None,
     ) -> Tensor:
         """
         Make ordinary mask if window size is not specified.
         """
         if self.causal:
-            mask = torch.tril(torch.ones(max_length, max_length))
+            mask = torch.ones(
+                max_length, max_length, dtype=torch.bool, device=device
+            )
+            mask.tril_()
         else:
-            mask = torch.ones(max_length, max_length)
+            mask = torch.ones(
+                max_length, max_length, dtype=torch.bool, device=device
+            )
             mask = mask.bool()[None, None]
             for i, x_len in enumerate(x_lens):
                 mask[:x_len, i] = 0
-        mask = mask.bool()[None, None]
-        return mask
+        return mask.bool()[None, None]
 
     def forward(
         self,
@@ -475,10 +481,11 @@ class WindowLimitedTransformer(Transformer):
         # construct mask to form window limited attention
         max_length = x.shape[1]
         if self.window_size is not None:
-            mask = self.make_window_limited_mask(max_length, x_lens)
+            mask = self.make_window_limited_mask(
+                max_length, x_lens, device=x.device
+            )
         else:
-            mask = self.make_mask(max_length, x_lens)
-        mask = mask.to(x.device)
+            mask = self.make_mask(max_length, x_lens, device=x.device)
         x = super().forward(x, input_pos, mask)
         x = self.output_proj(x)  # (B, T, D)
         if self.channels_first:
