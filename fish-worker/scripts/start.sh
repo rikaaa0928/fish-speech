@@ -28,6 +28,9 @@ fi
 if [ -z "${API_SERVER_DECODER_CONFIG_NAME+x}" ]; then
   export API_SERVER_DECODER_CONFIG_NAME=modded_dac_vq
 fi
+if [ -z "${API_SERVER_DECODER_DTYPE+x}" ]; then
+  export API_SERVER_DECODER_DTYPE=float32
+fi
 if [ -z "${API_SERVER_MAX_RUNNING_REQUESTS+x}" ]; then
   export API_SERVER_MAX_RUNNING_REQUESTS=1
 fi

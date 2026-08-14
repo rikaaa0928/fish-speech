@@ -8,6 +8,11 @@ from fish_speech.models.text2semantic.inference import launch_thread_safe_queue
 from fish_speech.utils.schema import ServeTTSRequest
 from tools.server.inference import inference_wrapper as inference
 
+DECODER_DTYPES = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+}
+
 
 def log_gpu_memory(stage: str) -> None:
     """Reusable startup GPU memory snapshot for the API server lifecycle.
@@ -40,6 +45,7 @@ class ModelManager:
         llama_checkpoint_path: str,
         decoder_checkpoint_path: str,
         decoder_config_name: str,
+        decoder_dtype: str = "float32",
         speed_method: SpeedMethod = "librosa",
         llama_max_seq_len: int | None = None,
     ) -> None:
@@ -49,6 +55,13 @@ class ModelManager:
         self.half = half
         self.compile = compile
         self.llama_max_seq_len = llama_max_seq_len
+        self.decoder_dtype = decoder_dtype
+
+        if decoder_dtype not in DECODER_DTYPES:
+            raise ValueError(
+                f"Unsupported decoder_dtype={decoder_dtype!r}; "
+                f"expected one of {sorted(DECODER_DTYPES)}"
+            )
 
         self.precision = torch.half if half else torch.bfloat16
 
@@ -60,6 +73,14 @@ class ModelManager:
             self.device = "cpu"
             logger.info("CUDA is not available, running on CPU.")
 
+        if decoder_dtype == "bfloat16" and torch.device(self.device).type != "cuda":
+            raise ValueError("decoder_dtype=bfloat16 is currently supported only on CUDA")
+        if decoder_dtype == "bfloat16" and half:
+            raise ValueError(
+                "decoder_dtype=bfloat16 cannot be combined with --half until "
+                "that mixed-precision path is validated"
+            )
+
         # Load the TTS models
         log_gpu_memory("before model load")
         self.load_llama_model(
@@ -67,7 +88,10 @@ class ModelManager:
         )
         log_gpu_memory("after LLAMA load/cache")
         self.load_decoder_model(
-            decoder_config_name, decoder_checkpoint_path, self.device
+            decoder_config_name,
+            decoder_checkpoint_path,
+            self.device,
+            DECODER_DTYPES[self.decoder_dtype],
         )
         log_gpu_memory("after DAC load")
         self.tts_inference_engine = TTSInferenceEngine(
@@ -100,11 +124,12 @@ class ModelManager:
 
         logger.info("LLAMA model loaded.")
 
-    def load_decoder_model(self, config_name, checkpoint_path, device) -> None:
+    def load_decoder_model(self, config_name, checkpoint_path, device, dtype) -> None:
         self.decoder_model = load_decoder_model(
             config_name=config_name,
             checkpoint_path=checkpoint_path,
             device=device,
+            dtype=dtype,
         )
         logger.info("Decoder model loaded.")
 

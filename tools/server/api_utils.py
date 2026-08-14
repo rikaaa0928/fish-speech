@@ -44,6 +44,16 @@ def parse_args():
         default="checkpoints/s2-pro/codec.pth",
     )
     parser.add_argument("--decoder-config-name", type=str, default="modded_dac_vq")
+    parser.add_argument(
+        "--decoder-dtype",
+        choices=["float32", "bfloat16"],
+        default="float32",
+        help=(
+            "Resident dtype for the DAC codec weights. bfloat16 can save "
+            "roughly half of codec weight VRAM but is experimental and must "
+            "be validated for audio quality. Default: float32."
+        ),
+    )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--half", action="store_true")
     parser.add_argument("--compile", action="store_true")

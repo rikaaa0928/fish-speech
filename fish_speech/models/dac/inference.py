@@ -20,7 +20,12 @@ from fish_speech.utils.file import AUDIO_EXTENSIONS
 OmegaConf.register_new_resolver("eval", eval)
 
 
-def load_model(config_name, checkpoint_path, device="cuda"):
+def load_model(
+    config_name,
+    checkpoint_path,
+    device="cuda",
+    dtype: torch.dtype = torch.float32,
+):
     hydra.core.global_hydra.GlobalHydra.instance().clear()
     with initialize(version_base="1.3", config_path="../../configs"):
         cfg = compose(config_name=config_name)
@@ -41,9 +46,9 @@ def load_model(config_name, checkpoint_path, device="cuda"):
 
     result = model.load_state_dict(state_dict, strict=False, assign=True)
     model.eval()
-    model.to(device)
+    model.to(device=device, dtype=dtype)
 
-    logger.info(f"Loaded model: {result}")
+    logger.info(f"Loaded model: {result}; device={device}; dtype={dtype}")
     return model
 
 

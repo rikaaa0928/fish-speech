@@ -150,6 +150,8 @@ class Worker:
                 str(self.config.api_server_decoder_checkpoint_path),
                 "--decoder-config-name",
                 self.config.api_server_decoder_config_name,
+                "--decoder-dtype",
+                self.config.api_server_decoder_dtype,
                 "--workers",
                 str(self.config.api_server_workers),
                 "--max-text-length",

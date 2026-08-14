@@ -83,6 +83,7 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 - `API_SERVER_MAX_QUEUED_REQUESTS`: worker local `v3` queue limit, default `1`. Set `0` to reject overload immediately.
 - `API_SERVER_MAX_QUEUED_REQUESTS_V1` / `_V2` / `_V3` / `_V4`: optional per-priority local queue limits. Unset priorities use the `v3` limit.
 - `API_SERVER_TTS_MAX_NEW_TOKENS`: default output-token limit when a client request omits `max_new_tokens`.
+- `API_SERVER_DECODER_DTYPE`: resident DAC codec weight dtype, `float32` by default. Set `bfloat16` only after GPU audio-quality validation; it is rejected on CPU/MPS and with `API_SERVER_HALF=1`.
 - `API_SERVER_COMPILE`: starts Fish API server with `--compile`, default `1`.
 - `API_SERVER_HALF`: starts Fish API server with `--half`, default `0`; default bf16 was more stable in testing.
 - `API_SERVER_WORKERS`: Uvicorn worker count, default `1`. Each worker loads its own model copy.

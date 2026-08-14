@@ -68,6 +68,7 @@ class Config:
     api_server_llama_max_seq_len: int | None
     api_server_decoder_checkpoint_path: Path
     api_server_decoder_config_name: str
+    api_server_decoder_dtype: str
     api_server_compile: bool
     api_server_half: bool
     api_server_workers: int
@@ -103,6 +104,13 @@ class Config:
             raise ValueError(
                 "API_SERVER_SPEED_METHOD must be either 'librosa' or 'linear'"
             )
+        api_server_decoder_dtype = os.getenv(
+            "API_SERVER_DECODER_DTYPE", "float32"
+        ).strip().lower()
+        if api_server_decoder_dtype not in {"float32", "bfloat16"}:
+            raise ValueError(
+                "API_SERVER_DECODER_DTYPE must be either 'float32' or 'bfloat16'"
+            )
 
         return cls(
             manager_url=manager_url,
@@ -124,6 +132,7 @@ class Config:
                 or os.getenv("DECODER_CHECKPOINT_PATH", "/models/s2-pro/codec.pth")
             ),
             api_server_decoder_config_name=os.getenv("API_SERVER_DECODER_CONFIG_NAME", "modded_dac_vq"),
+            api_server_decoder_dtype=api_server_decoder_dtype,
             api_server_compile=env_bool("API_SERVER_COMPILE", True),
             api_server_half=env_bool("API_SERVER_HALF", False),
             api_server_workers=max(1, env_int("API_SERVER_WORKERS", 1)),
