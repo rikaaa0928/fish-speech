@@ -88,7 +88,12 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 error=None,
             )
 
-        segments = []
+        # Streaming responses are already emitted segment by segment. Keeping
+        # every segment and concatenating them again at the end only grows host
+        # memory with request duration; the streaming API discards that final
+        # aggregate. Non-streaming responses still need the accumulated audio.
+        segments = [] if not req.streaming else None
+        segment_count = 0
 
         while True:
             # Get the response from the LLAMA model
@@ -114,6 +119,7 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
             result: GenerateResponse = wrapped_result.response
             if result.action != "next":
                 segment = self.get_audio_segment(result)
+                segment_count += 1
 
                 if req.streaming:  # Used only by the API server
                     segment = adjust_speed(
@@ -126,7 +132,9 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                         audio=(sample_rate, segment),
                         error=None,
                     )
-                segments.append(segment)
+                else:
+                    assert segments is not None
+                    segments.append(segment)
             else:
                 break
 
@@ -136,21 +144,23 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
             gc.collect()
 
         # Edge case: no audio generated
-        if len(segments) == 0:
+        if segment_count == 0:
             yield InferenceResult(
                 code="error",
                 audio=None,
                 error=RuntimeError("No audio generated, please check the input text."),
             )
+        elif req.streaming:
+            yield InferenceResult(code="final", audio=None, error=None)
         else:
             # Streaming or not, return the final audio
+            assert segments is not None
             audio = np.concatenate(segments, axis=0)
-            if not req.streaming:
-                audio = adjust_speed(
-                    audio,
-                    req.effective_speed,
-                    method=self.speed_method,
-                )
+            audio = adjust_speed(
+                audio,
+                req.effective_speed,
+                method=self.speed_method,
+            )
             yield InferenceResult(
                 code="final",
                 audio=(sample_rate, audio),
