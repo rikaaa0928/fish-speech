@@ -4,6 +4,7 @@ import numpy as np
 from kui.asgi import HTTPException
 
 from fish_speech.inference_engine import TTSInferenceEngine
+from fish_speech.models.text2semantic.inference import ContextLengthExceededError
 from fish_speech.utils.schema import ServeTTSRequest
 
 AMPLITUDE = 32768  # Needs an explaination
@@ -22,8 +23,13 @@ def inference_wrapper(req: ServeTTSRequest, engine: TTSInferenceEngine):
                     yield result.audio[1]
 
             case "error":
+                status = (
+                    HTTPStatus.UNPROCESSABLE_ENTITY
+                    if isinstance(result.error, ContextLengthExceededError)
+                    else HTTPStatus.INTERNAL_SERVER_ERROR
+                )
                 raise HTTPException(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    status,
                     content=str(result.error),
                 )
 

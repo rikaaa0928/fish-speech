@@ -41,6 +41,10 @@ from fish_speech.models.text2semantic.llama import (
 )
 
 
+class ContextLengthExceededError(ValueError):
+    """The requested prompt and generation exceed the loaded context cap."""
+
+
 def multinomial_sample_one_no_sync(probs_sort):
     q = torch.rand_like(probs_sort)
     q = -torch.log(q)
@@ -266,7 +270,7 @@ def generate(
     prompt = prompt[None].repeat(num_samples, 1, 1)
 
     if T >= model.config.max_seq_len:
-        raise ValueError(
+        raise ContextLengthExceededError(
             f"Input sequence length {T} exceeds max_seq_len {model.config.max_seq_len}"
         )
 
@@ -742,7 +746,7 @@ def generate_long(
             # Validate against the request's actual generation length instead of
             # a hardcoded reservation. Rejects before generate() silently clamps.
             if max_new_tokens and prompt_length + max_new_tokens > max_length:
-                raise ValueError(
+                raise ContextLengthExceededError(
                     f"Requested sequence exceeds the LLAMA context limit: "
                     f"prompt={prompt_length} tokens + generation={max_new_tokens} tokens "
                     f"= {prompt_length + max_new_tokens}, but max_seq_len={max_length}. "
