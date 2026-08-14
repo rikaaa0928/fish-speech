@@ -174,3 +174,25 @@ BF16 在加载和 warmup 阶段的 allocated 比 FP32 低约 0.73 GiB。表中�
 | `/v1/vqgan/decode` | 200，266,240 字节 PCM | 200，266,240 字节 PCM |
 
 最终测试额外发现并修复：流式 WAV header 被异步层过滤、DAC VQ decode 调用了不兼容签名、BF16 tensor 不能直接转换为 NumPy。修复后两种 codec dtype 的完整矩阵均通过，测试服务已停止，GPU 已释放。
+
+---
+
+## 10. 生成长度与截断语义验证
+
+测试配置为 FP32 codec、`llama_max_seq_len=8192`，使用同一参考音频、文本模板和 seed。普通中文文本不会由 API server 自动拆分，因此这里验证的是单次生成的完整性。
+
+| `max_new_tokens` | 输入长度 | HTTP | 生成 tokens | 音频时长 | 结果 |
+|---:|---:|---:|---:|---:|---|
+| 1024 | 149 字 | 200 | 898 | 41.66 s | 正常 EOS，完整 |
+| 1024 | 170 字 | 206 | 1024 | 47.55 s | 触顶，保留已生成 WAV |
+| 2048 | 304 字 | 200 | 1783 | 82.76 s | 正常 EOS，完整 |
+
+结论：`8192 + 1024` 的实际瓶颈是生成 token 上限，完整中文长度仍约 150 字量级，并没有相对旧配置获得有意义的提升。保持 LLAMA cap 为 8192、把 `max_new_tokens` 提高到 2048 后，同一模板可完整处理约 300 字，处理长度接近翻倍；本轮 2048 请求的生成期累计峰值约 18.36 GB，完成后 nvidia-smi 回落到约 11.6 GiB。
+
+截断现在采用以下非流式响应语义：
+
+- 正常 EOS：HTTP 200，`X-TTS-Finish-Reason: stop`
+- 达到生成上限：HTTP 206，`X-TTS-Finish-Reason: length`
+- 两者均返回可播放音频，并带 `X-TTS-Generated-Tokens`、`X-TTS-Max-New-Tokens`、`X-TTS-Input-Characters`
+
+流式响应在生成完成前已经发出 HTTP 状态，无法在末尾改为 206，因此本轮只对非流式请求提供 206 语义。

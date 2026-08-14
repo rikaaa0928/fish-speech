@@ -167,6 +167,16 @@ pub struct InferenceDone {
     pub audio_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_new_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_characters: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,5 +242,21 @@ mod tests {
         assert!(heartbeat.queued_chars_by_priority.is_empty());
         assert!(heartbeat.inflight_chars_by_priority.is_empty());
         assert_eq!(heartbeat.workload_metrics_version, 0);
+    }
+
+    #[test]
+    fn inference_done_accepts_workers_without_completion_metadata() {
+        let done: InferenceDone = serde_json::from_value(serde_json::json!({
+            "request_id": "legacy-request",
+            "audio_bytes": 1234,
+            "chunks": 1
+        }))
+        .expect("legacy inference_done should deserialize");
+
+        assert_eq!(done.http_status, None);
+        assert_eq!(done.finish_reason, None);
+        assert_eq!(done.generated_tokens, None);
+        assert_eq!(done.max_new_tokens, None);
+        assert_eq!(done.input_characters, None);
     }
 }

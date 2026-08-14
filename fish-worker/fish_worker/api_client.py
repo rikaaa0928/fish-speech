@@ -59,6 +59,26 @@ async def call_api_server(
                 return None
 
             content_type = response.headers.get("content-type", "application/octet-stream")
+            finish_reason = response.headers.get("x-tts-finish-reason")
+
+            def optional_int_header(name: str) -> int | None:
+                value = response.headers.get(name)
+                if value is None:
+                    return None
+                try:
+                    return int(value)
+                except ValueError:
+                    log(
+                        "Fish API server returned invalid integer metadata",
+                        request_id=request_id,
+                        header=name,
+                        value=value,
+                    )
+                    return None
+
+            generated_tokens = optional_int_header("x-tts-generated-tokens")
+            max_new_tokens = optional_int_header("x-tts-max-new-tokens")
+            input_characters = optional_int_header("x-tts-input-characters")
             if stream:
                 seq = 0
                 async for chunk in response.content.iter_chunked(64 * 1024):
@@ -93,12 +113,21 @@ async def call_api_server(
                 api_server_ms=upstream_ms,
                 chunk_send_ms=chunk_send_ms,
                 first_chunk_ms=first_chunk_ms,
+                finish_reason=finish_reason,
+                generated_tokens=generated_tokens,
+                max_new_tokens=max_new_tokens,
+                input_characters=input_characters,
             )
             worker.api_server_watchdog_failures = 0
             return {
                 "audio_bytes": audio_bytes,
                 "chunks": chunks,
                 "content_type": content_type,
+                "http_status": response.status,
+                "finish_reason": finish_reason,
+                "generated_tokens": generated_tokens,
+                "max_new_tokens": max_new_tokens,
+                "input_characters": input_characters,
                 "timings": {
                     "total_ms": 0.0,
                     "reference_ms": 0.0,

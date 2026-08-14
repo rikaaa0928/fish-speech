@@ -678,7 +678,16 @@ async fn non_streaming_inference(
                         audio.len() as u64,
                         &done,
                     );
-                    return binary_response(StatusCode::OK, content_type, audio.freeze());
+                    let status = if done.finish_reason.as_deref() == Some("length")
+                        || done.http_status == Some(StatusCode::PARTIAL_CONTENT.as_u16())
+                    {
+                        StatusCode::PARTIAL_CONTENT
+                    } else {
+                        StatusCode::OK
+                    };
+                    let mut response = binary_response(status, content_type, audio.freeze())?;
+                    add_tts_completion_headers(response.headers_mut(), &done)?;
+                    return Ok(response);
                 }
                 WorkerEvent::Error(error) => {
                     tracing::warn!(
@@ -1087,6 +1096,11 @@ fn log_speech_completed(
         manager_audio_bytes,
         worker_audio_bytes = ?done.audio_bytes,
         worker_chunks = ?done.chunks,
+        worker_http_status = ?done.http_status,
+        finish_reason = ?done.finish_reason,
+        generated_tokens = ?done.generated_tokens,
+        max_new_tokens = ?done.max_new_tokens,
+        worker_input_characters = ?done.input_characters,
         total_ms = elapsed_ms(trace.started),
         manager_reference_ms = trace.manager_reference_ms,
         manager_dispatch_ms = dispatch.dispatch_ms(),
@@ -1139,6 +1153,36 @@ fn binary_response(status: StatusCode, content_type: String, bytes: Bytes) -> Ap
         .header(header::CONTENT_TYPE, content_type)
         .body(Body::from(bytes))
         .map_err(|error| AppError::Internal(anyhow::Error::from(error)))
+}
+
+fn add_tts_completion_headers(
+    headers: &mut HeaderMap,
+    done: &crate::protocol::InferenceDone,
+) -> AppResult<()> {
+    fn insert_header(
+        headers: &mut HeaderMap,
+        name: &'static str,
+        value: impl ToString,
+    ) -> AppResult<()> {
+        let value = HeaderValue::from_str(&value.to_string())
+            .map_err(|error| AppError::Internal(anyhow::Error::from(error)))?;
+        headers.insert(name, value);
+        Ok(())
+    }
+
+    if let Some(value) = &done.finish_reason {
+        insert_header(headers, "x-tts-finish-reason", value)?;
+    }
+    if let Some(value) = done.generated_tokens {
+        insert_header(headers, "x-tts-generated-tokens", value)?;
+    }
+    if let Some(value) = done.max_new_tokens {
+        insert_header(headers, "x-tts-max-new-tokens", value)?;
+    }
+    if let Some(value) = done.input_characters {
+        insert_header(headers, "x-tts-input-characters", value)?;
+    }
+    Ok(())
 }
 
 fn decode_audio(input: &str) -> AppResult<Vec<u8>> {

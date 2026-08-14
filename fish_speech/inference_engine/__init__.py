@@ -94,6 +94,8 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         # aggregate. Non-streaming responses still need the accumulated audio.
         segments = [] if not req.streaming else None
         segment_count = 0
+        finish_reason = "stop"
+        generated_tokens = 0
 
         while True:
             # Get the response from the LLAMA model
@@ -120,6 +122,9 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
             if result.action != "next":
                 segment = self.get_audio_segment(result)
                 segment_count += 1
+                generated_tokens += result.generated_tokens
+                if result.finish_reason == "length":
+                    finish_reason = "length"
 
                 if req.streaming:  # Used only by the API server
                     segment = adjust_speed(
@@ -136,6 +141,8 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                     assert segments is not None
                     segments.append(segment)
             else:
+                if result.finish_reason == "length":
+                    finish_reason = "length"
                 break
 
         # Clean up the memory
@@ -151,7 +158,15 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 error=RuntimeError("No audio generated, please check the input text."),
             )
         elif req.streaming:
-            yield InferenceResult(code="final", audio=None, error=None)
+            yield InferenceResult(
+                code="final",
+                audio=None,
+                error=None,
+                finish_reason=finish_reason,
+                generated_tokens=generated_tokens,
+                max_new_tokens=req.max_new_tokens,
+                input_characters=len(req.text),
+            )
         else:
             # Streaming or not, return the final audio
             assert segments is not None
@@ -165,6 +180,10 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 code="final",
                 audio=(sample_rate, audio),
                 error=None,
+                finish_reason=finish_reason,
+                generated_tokens=generated_tokens,
+                max_new_tokens=req.max_new_tokens,
+                input_characters=len(req.text),
             )
 
         return None

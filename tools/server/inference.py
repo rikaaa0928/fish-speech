@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from http import HTTPStatus
 
 import numpy as np
@@ -8,6 +9,15 @@ from fish_speech.models.text2semantic.inference import ContextLengthExceededErro
 from fish_speech.utils.schema import ServeTTSRequest
 
 AMPLITUDE = 32768  # Needs an explaination
+
+
+@dataclass(frozen=True)
+class FinalAudio:
+    audio: np.ndarray
+    finish_reason: str
+    generated_tokens: int
+    max_new_tokens: int
+    input_characters: int
 
 
 def inference_wrapper(req: ServeTTSRequest, engine: TTSInferenceEngine):
@@ -46,7 +56,13 @@ def inference_wrapper(req: ServeTTSRequest, engine: TTSInferenceEngine):
             case "final":
                 count += 1
                 if isinstance(result.audio, tuple):
-                    yield result.audio[1]
+                    yield FinalAudio(
+                        audio=result.audio[1],
+                        finish_reason=result.finish_reason or "stop",
+                        generated_tokens=result.generated_tokens or 0,
+                        max_new_tokens=result.max_new_tokens or req.max_new_tokens,
+                        input_characters=result.input_characters or len(req.text),
+                    )
                 return None  # Stop the generator
 
     if count == 0:

@@ -11,6 +11,10 @@ class InferenceResult:
     code: Literal["header", "segment", "error", "final"]
     audio: Optional[Tuple[int, np.ndarray]]
     error: Optional[Exception]
+    finish_reason: Literal["stop", "length"] | None = None
+    generated_tokens: int | None = None
+    max_new_tokens: int | None = None
+    input_characters: int | None = None
 
 
 def wav_chunk_header(

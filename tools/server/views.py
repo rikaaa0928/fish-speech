@@ -42,7 +42,7 @@ from tools.server.api_utils import (
     get_content_type,
     inference_async,
 )
-from tools.server.inference import inference_wrapper as inference
+from tools.server.inference import FinalAudio, inference_wrapper
 from tools.server.model_manager import ModelManager
 from tools.server.model_utils import (
     batch_vqgan_decode,
@@ -179,21 +179,34 @@ async def tts(req: Annotated[ServeTTSRequest, Body(exclusive=True)]):
                 content_type=get_content_type(req.format),
             )
         else:
-            fake_audios = next(inference(req, engine))
+            final_audio = next(inference_wrapper(req, engine))
+            if not isinstance(final_audio, FinalAudio):
+                raise RuntimeError("TTS inference did not return final audio")
             buffer = io.BytesIO()
             sf.write(
                 buffer,
-                fake_audios,
+                final_audio.audio,
                 sample_rate,
                 format=req.format,
+            )
+
+            status_code = (
+                HTTPStatus.PARTIAL_CONTENT
+                if final_audio.finish_reason == "length"
+                else HTTPStatus.OK
             )
 
             return StreamResponse(
                 iterable=buffer_to_async_generator(buffer.getvalue()),
                 headers={
                     "Content-Disposition": f"attachment; filename=audio.{req.format}",
+                    "X-TTS-Finish-Reason": final_audio.finish_reason,
+                    "X-TTS-Generated-Tokens": str(final_audio.generated_tokens),
+                    "X-TTS-Max-New-Tokens": str(final_audio.max_new_tokens),
+                    "X-TTS-Input-Characters": str(final_audio.input_characters),
                 },
                 content_type=get_content_type(req.format),
+                status_code=status_code,
             )
     except HTTPException:
         # Re-raise HTTP exceptions as they are already properly formatted

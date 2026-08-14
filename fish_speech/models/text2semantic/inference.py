@@ -522,6 +522,9 @@ class GenerateResponse:
     action: Literal["sample", "next"]
     codes: Optional[torch.Tensor] = None
     text: Optional[str] = None
+    finish_reason: Literal["stop", "length"] = "stop"
+    generated_tokens: int = 0
+    max_new_tokens: int = 0
 
 
 def split_text_by_speaker(text: str) -> list[str]:
@@ -774,6 +777,12 @@ def generate_long(
 
             t_batch = time.perf_counter() - t0
             tokens_generated = y.size(1) - prompt_length
+            ended_normally = bool(
+                y[0, -1].item() == tokenizer.get_token_id(IM_END_TOKEN)
+            )
+            finish_reason: Literal["stop", "length"] = (
+                "stop" if ended_normally else "length"
+            )
             tokens_sec = tokens_generated / t_batch if t_batch > 0 else 0
             logger.info(
                 f"Batch {batch_idx}: Generated {tokens_generated} tokens in "
@@ -784,7 +793,13 @@ def generate_long(
             )
 
             # Extract generated codes
-            codes = y[1:, prompt_length:-1].clone()
+            # A normal generation ends with IM_END, which is not an audio
+            # frame. If the generation exhausted max_new_tokens, every token
+            # is audio and must be preserved in the partial result.
+            codes = y[
+                1:,
+                prompt_length:-1 if ended_normally else None,
+            ].clone()
             assert (codes >= 0).all(), f"Negative code found: {codes}"
 
             # Add assistant message with generated codes back to conversation
@@ -799,7 +814,23 @@ def generate_long(
                 )
             )
 
-            yield GenerateResponse(action="sample", codes=codes, text=batch_text)
+            yield GenerateResponse(
+                action="sample",
+                codes=codes,
+                text=batch_text,
+                finish_reason=finish_reason,
+                generated_tokens=tokens_generated,
+                max_new_tokens=max_new_tokens,
+            )
+
+            if finish_reason == "length":
+                yield GenerateResponse(
+                    action="next",
+                    finish_reason="length",
+                    generated_tokens=tokens_generated,
+                    max_new_tokens=max_new_tokens,
+                )
+                return
 
             # Cleanup
             del y, encoded

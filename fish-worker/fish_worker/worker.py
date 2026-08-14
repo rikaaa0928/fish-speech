@@ -668,6 +668,9 @@ class Worker:
                     reference_ms=reference_ms,
                     api_server_ms=timings["api_server_ms"],
                     chunk_send_ms=timings["chunk_send_ms"],
+                    finish_reason=result["finish_reason"],
+                    generated_tokens=result["generated_tokens"],
+                    max_new_tokens=result["max_new_tokens"],
                 )
                 await send_msg(
                     ws,
@@ -677,6 +680,11 @@ class Worker:
                         "timings": timings,
                         "audio_bytes": result["audio_bytes"],
                         "chunks": result["chunks"],
+                        "http_status": result["http_status"],
+                        "finish_reason": result["finish_reason"],
+                        "generated_tokens": result["generated_tokens"],
+                        "max_new_tokens": result["max_new_tokens"],
+                        "input_characters": result["input_characters"],
                     },
                 )
         except aiohttp.ClientError as exc:
