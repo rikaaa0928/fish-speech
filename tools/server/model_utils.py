@@ -7,6 +7,8 @@ import torch
 import torchaudio
 from cachetools import LRUCache, cached
 
+from fish_speech.models.dac.modded_dac import DAC
+
 CACHE_MAXSIZE = 10000
 MICRO_BATCH_SIZE = 8
 ASR_SAMPLE_RATE = 16000
@@ -93,11 +95,17 @@ def batch_vqgan_decode(model, features):
     # If bs too large, we do micro batch decode
     audios, audio_lengths = [], []
     for i in range(0, padded.shape[0], MICRO_BATCH_SIZE):
+        feature_batch = padded[i : i + MICRO_BATCH_SIZE]
+        length_batch = lengths[i : i + MICRO_BATCH_SIZE]
         with model_autocast(model):
-            audio, audio_length = model.decode(
-                padded[i : i + MICRO_BATCH_SIZE],
-                feature_lengths=lengths[i : i + MICRO_BATCH_SIZE],
-            )
+            if isinstance(model, DAC):
+                audio = model.from_indices(feature_batch.long())
+                audio_length = length_batch * model.frame_length
+            else:
+                audio, audio_length = model.decode(
+                    feature_batch,
+                    feature_lengths=length_batch,
+                )
         audios.append(audio)
         audio_lengths.append(audio_length)
     audios = torch.cat(audios, dim=0)

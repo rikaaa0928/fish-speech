@@ -20,7 +20,12 @@ def inference_wrapper(req: ServeTTSRequest, engine: TTSInferenceEngine):
         match result.code:
             case "header":
                 if isinstance(result.audio, tuple):
-                    yield result.audio[1]
+                    header = result.audio[1]
+                    yield (
+                        header.tobytes()
+                        if isinstance(header, np.ndarray)
+                        else header
+                    )
 
             case "error":
                 status = (
