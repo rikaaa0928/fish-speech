@@ -112,4 +112,7 @@ def batch_vqgan_decode(model, features):
     audio_lengths = torch.cat(audio_lengths, dim=0)
     audios, audio_lengths = audios.cpu(), audio_lengths.cpu()
 
-    return [audio[..., :length].numpy() for audio, length in zip(audios, audio_lengths)]
+    return [
+        audio[..., :length].float().numpy()
+        for audio, length in zip(audios, audio_lengths)
+    ]
