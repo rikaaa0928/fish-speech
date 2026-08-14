@@ -104,15 +104,15 @@ warmup 生成期 torch 内部 `GPU Memory used = 18.87 GB`。
 | `max_new_tokens=40000`（prompt+gen > 上限） | 清晰报错：`Requested sequence exceeds the LLAMA context limit: prompt=21 tokens + generation=40000 tokens = 40021, but max_seq_len=32768. Maximum acceptable generation length here: 32747 tokens.` |
 | 非法 cap（<4096 / 非 8 倍数） | `validate_llama_max_seq_len` 在 parse 阶段即拒绝（代码路径，未单独跑） |
 
-> 注：长度超限目前以 HTTP 500 返回（异常被统一异常处理器包装）。消息已足够清晰，后续可考虑改为 400/422 更符合语义。
+> 2026-08-14 最终回归已将明确的上下文长度超限改为 HTTP 422；其他内部推理异常仍返回 500。
 
 ---
 
 ## 7. 遗留事项与注意事项
 
-1. **codec bf16（+~0.85 GiB）未实施**：按约定"暂不做"，需先独立验证 RVQ/Snake/weight-norm conv 算子兼容性、音质/底噪、参考编码稳定性、CUDA/CPU/MPS 差异。
-2. **DAC encoder 常驻**：encoder 仍加载（参考音频编码 + 缓存），删除可再省 ~1.5 GiB，属"暂不做"。
-3. **未做回归项**：长参考音频（触发 DAC RoPE 扩展路径）、8192 边界附近的 prompt+gen、`/v1/vqgan/encode|decode`、`/v1/references/*`、`--half`/`--compile` 组合、多 worker。
+1. **codec BF16 已做成可选项**：默认仍为 FP32；仅显式设置 `API_SERVER_DECODER_DTYPE=bfloat16` 时启用。最终回归见第 9 节。
+2. **DAC encoder 常驻**：按实际模型参数统计，单独删除 encoder 仅省 293 MiB（FP32）/147 MiB（BF16）。完整 decode-only 还可删除 quantizer 的 downsample + pre_module，合计约省 789 MiB（FP32）/395 MiB（BF16），但会禁用参考音频克隆和 `/v1/vqgan/encode`，本轮不实施。
+3. **仍未回归项**：8192 边界附近的成功请求、`/v1/references/*`、`--half`、多 worker。长参考音频、`--compile`、VQGAN encode/decode 已在最终回归覆盖。
 4. **`.git` 未随代码 scp**：远程 `/root/fish-speech` 是纯源码树，若运行 `autodl_start_worker.sh` 的 git pull 会自动跳过（无 .git），不会覆盖本地改动。
 5. **端口**：测试用 8000/8001；worker 默认 8000（`start.sh`）。
 6. **部署注意**：worker 部署默认 `API_SERVER_LLAMA_MAX_SEQ_LEN=8192`；要保留 checkpoint 原始 32768 需显式设空 `API_SERVER_LLAMA_MAX_SEQ_LEN=`。
@@ -142,3 +142,35 @@ $V -m tools.api_server \
 curl -X POST http://127.0.0.1:8000/v1/tts -H "Content-Type: application/json" \
   -d '{"text":"测试语音","references":[],"max_new_tokens":200,"format":"wav"}' -o out.wav
 ```
+
+---
+
+## 9. 2026-08-14 最终综合回归
+
+- 测试源码：`worker-api-server-backend`，最终 HEAD `fd494e9`
+- 测试目录：远程独立源码树 `/root/fish-speech-final-test-20260814`，未覆盖正式目录
+- GPU：RTX 3090 24 GB
+- LLAMA：`max_seq_len=8192`，FP32/BF16 codec 两轮均覆盖 `--compile`
+- 参考音频：83.52 秒、44.1 kHz、单声道 PCM
+
+### 9.1 显存与长参考克隆
+
+| codec dtype | DAC 加载后 allocated | warmup 后 allocated/reserved | nvidia-smi | 长参考克隆 |
+|---|---:|---:|---:|---|
+| FP32（默认） | 11.21 GiB | 11.22 / 11.25 GiB | 11,860 MiB（TTS 后） | HTTP 200，942,124 字节 WAV，9.57 s 墙钟，FFmpeg 完整解码 |
+| BF16（可选） | 10.48 GiB | 10.50 / 10.59 GiB | 11,534 MiB（TTS/API 后） | HTTP 200，1,007,660 字节 WAV，8.49 s 墙钟，FFmpeg 完整解码 |
+
+BF16 在加载和 warmup 阶段的 allocated 比 FP32 低约 0.73 GiB。表中的 nvidia-smi 数值采自不同 API 序列之后，受 CUDA allocator reserve 影响，不作为严格 A/B 差值。两种精度使用相同参考、文本、seed 和采样参数，但生成 token 序列不同，因此只可认为本轮主观听感无明显退化，不是数学意义的无损或波形等价。
+
+### 9.2 API 与错误路径
+
+| 项目 | FP32 | BF16 |
+|---|---|---|
+| `/v1/health` | 200 | 200 |
+| 长参考 `/v1/tts` | 200，WAV 可完整解码 | 200，WAV 可完整解码 |
+| 流式 `/v1/tts` | 200，`RIFF` header，FFmpeg 可解码 | 200，`RIFF` header，FFmpeg 可解码 |
+| 上下文超限 | HTTP 422，包含 prompt/gen/limit 明细 | HTTP 422 |
+| `/v1/vqgan/encode`（3 秒参考） | 200，tokens `[10, 65]` | 200，tokens `[10, 65]` |
+| `/v1/vqgan/decode` | 200，266,240 字节 PCM | 200，266,240 字节 PCM |
+
+最终测试额外发现并修复：流式 WAV header 被异步层过滤、DAC VQ decode 调用了不兼容签名、BF16 tensor 不能直接转换为 NumPy。修复后两种 codec dtype 的完整矩阵均通过，测试服务已停止，GPU 已释放。
