@@ -87,7 +87,8 @@ class ReferenceLoader:
                 read_ref_text(str(ref_audio.with_suffix(".lab")))
                 for ref_audio in ref_audios
             ]
-            self.ref_by_id[id] = (prompt_tokens, prompt_texts)
+            if use_cache == "on":
+                self.ref_by_id[id] = (prompt_tokens, prompt_texts)
 
         else:
             # Reuse already encoded references
@@ -116,7 +117,11 @@ class ReferenceLoader:
                     )
                 )
                 prompt_texts.append(ref.text)
-                self.ref_by_hash[audio_hashes[i]] = (prompt_tokens[-1], ref.text)
+                if use_cache == "on":
+                    self.ref_by_hash[audio_hashes[i]] = (
+                        prompt_tokens[-1],
+                        ref.text,
+                    )
 
             else:
                 # Reuse already encoded references
