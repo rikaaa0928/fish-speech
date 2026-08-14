@@ -14,6 +14,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from fish_speech.inference_engine import TTSInferenceEngine
+from fish_speech.models.text2semantic.inference import validate_llama_max_seq_len
 from fish_speech.utils.schema import ServeTTSRequest
 from tools.server.inference import inference_wrapper as inference
 
@@ -25,6 +26,17 @@ def parse_args():
         "--llama-checkpoint-path",
         type=str,
         default="checkpoints/s2-pro",
+    )
+    parser.add_argument(
+        "--llama-max-seq-len",
+        type=int,
+        default=None,
+        help=(
+            "Explicit LLAMA context cap in tokens. When set, the KV cache, "
+            "causal mask and RoPE table are sized to this value instead of the "
+            "checkpoint default (32768), saving several GiB of VRAM. Must be a "
+            "multiple of 8 and >= 4096. Default: None (keep checkpoint value)."
+        ),
     )
     parser.add_argument(
         "--decoder-checkpoint-path",
@@ -49,7 +61,10 @@ def parse_args():
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--api-key", type=str, default=None)
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.llama_max_seq_len is not None:
+        validate_llama_max_seq_len(args.llama_max_seq_len)
+    return args
 
 
 class MsgPackRequest(HttpRequest):

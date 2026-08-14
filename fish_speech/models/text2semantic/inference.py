@@ -34,6 +34,7 @@ if hasattr(torch._inductor.config, "fx_graph_cache"):
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from fish_speech.models.text2semantic.llama import (
+    BaseModelArgs,
     BaseTransformer,
     DualARTransformer,
     NaiveTransformer,
@@ -49,6 +50,11 @@ def multinomial_sample_one_no_sync(probs_sort):
 RAS_WIN_SIZE = 10  # window for Repetition Aware Sampling
 RAS_HIGH_TEMP = 1.0
 RAS_HIGH_TOP_P = 0.9
+
+# Minimum / alignment rule for an explicit LLAMA context cap
+# (--llama-max-seq-len). The floor keeps headroom for a typical prompt plus
+# the reserved generation space; anything else fails at startup on purpose.
+MIN_LLAMA_MAX_SEQ_LEN = 4096
 
 
 def logits_to_probs(
@@ -359,8 +365,54 @@ def generate(
     return seq
 
 
-def init_model(checkpoint_path, device, precision, compile=False):
-    model = DualARTransformer.from_pretrained(checkpoint_path, load_weights=True)
+def validate_llama_max_seq_len(max_seq_len: int) -> int:
+    """Validate an explicit LLAMA context cap, failing loudly instead of
+    silently rounding. The floor leaves room for a typical prompt plus the
+    reserved generation space."""
+    if max_seq_len < MIN_LLAMA_MAX_SEQ_LEN:
+        raise ValueError(
+            f"llama_max_seq_len must be >= {MIN_LLAMA_MAX_SEQ_LEN} "
+            f"(prompt + generation headroom), got {max_seq_len}"
+        )
+    if max_seq_len % 8 != 0:
+        raise ValueError(
+            f"llama_max_seq_len must be a multiple of 8, got {max_seq_len}"
+        )
+    return max_seq_len
+
+
+def init_model(checkpoint_path, device, precision, compile=False, max_seq_len=None):
+    if max_seq_len is not None:
+        max_seq_len = validate_llama_max_seq_len(max_seq_len)
+
+    # Parse the checkpoint config with the same parser used by
+    # from_pretrained(), so both the nested fish_qwen3_omni layout and the flat
+    # dual_ar/naive layouts yield the original context cap.
+    checkpoint_cap = None
+    try:
+        checkpoint_cap = BaseModelArgs.from_pretrained(
+            str(checkpoint_path)
+        ).max_seq_len
+    except Exception as exc:
+        logger.warning(f"Failed to read checkpoint config: {exc}")
+
+    # The option is meant to *cap* context (save VRAM), never to expand it.
+    # Refuse a value above the checkpoint cap so a typo (e.g. 65536) cannot
+    # balloon the KV cache / causal mask and OOM at startup.
+    if (
+        max_seq_len is not None
+        and checkpoint_cap is not None
+        and max_seq_len > checkpoint_cap
+    ):
+        raise ValueError(
+            f"llama_max_seq_len={max_seq_len} exceeds the checkpoint "
+            f"max_seq_len ({checkpoint_cap}); refusing to expand the context. "
+            f"This option only lowers the cap to save VRAM."
+        )
+
+    model = DualARTransformer.from_pretrained(
+        checkpoint_path, load_weights=True, max_length=max_seq_len
+    )
 
     model = model.to(device=device, dtype=precision)
     logger.info(f"Restored model from checkpoint")
@@ -371,6 +423,23 @@ def init_model(checkpoint_path, device, precision, compile=False):
         logger.info("Using DualARTransformer")
     else:
         raise ValueError("Unsupported model type")
+
+    # Estimated slow-model KV cache footprint (bf16) at the configured cap.
+    kv_bytes = (
+        model.config.n_layer
+        * 2
+        * model.config.n_local_heads
+        * model.config.max_seq_len
+        * model.config.head_dim
+        * 2
+    )
+    logger.info(
+        "LLAMA context: checkpoint_cap={} actual_max_seq_len={} "
+        "estimated_kv_cache={:.2f} GiB",
+        checkpoint_cap,
+        model.config.max_seq_len,
+        kv_bytes / 2**30,
+    )
 
     # Pre-create fixed parameter tensors to avoid runtime creation
     model.fixed_temperature = torch.tensor(0.7, device=device, dtype=torch.float)
@@ -667,13 +736,19 @@ def generate_long(
                     f"Audio masks non-zero count: {torch.count_nonzero(audio_masks)}"
                 )
 
-            if encoded.size(1) > max_length - 2048:
-                raise ValueError(
-                    f"Prompt is too long: {encoded.size(1)} > {max_length - 2048}"
-                )
-
             encoded = encoded.to(device=device)
             prompt_length = encoded.size(1)
+
+            # Validate against the request's actual generation length instead of
+            # a hardcoded reservation. Rejects before generate() silently clamps.
+            if max_new_tokens and prompt_length + max_new_tokens > max_length:
+                raise ValueError(
+                    f"Requested sequence exceeds the LLAMA context limit: "
+                    f"prompt={prompt_length} tokens + generation={max_new_tokens} tokens "
+                    f"= {prompt_length + max_new_tokens}, but max_seq_len={max_length}. "
+                    f"Maximum acceptable generation length here: "
+                    f"{max_length - prompt_length} tokens."
+                )
 
             y = generate(
                 model=model,
@@ -750,21 +825,38 @@ def launch_thread_safe_queue(
     device,
     precision,
     compile: bool = False,
+    max_seq_len: int | None = None,
 ):
     input_queue = queue.Queue()
     init_event = threading.Event()
+    init_error: Exception | None = None
 
     def worker():
-        model, decode_one_token = init_model(
-            checkpoint_path, device, precision, compile=compile
-        )
-        with torch.device(device):
-            model.setup_caches(
-                max_batch_size=1,
-                max_seq_len=model.config.max_seq_len,
-                dtype=next(model.parameters()).dtype,
+        nonlocal init_error
+        try:
+            model, decode_one_token = init_model(
+                checkpoint_path, device, precision, compile=compile, max_seq_len=max_seq_len
             )
-        init_event.set()
+            with torch.device(device):
+                model.setup_caches(
+                    max_batch_size=1,
+                    max_seq_len=model.config.max_seq_len,
+                    dtype=next(model.parameters()).dtype,
+                )
+        except Exception as exc:
+            # Save the error and always signal the waiting thread. Without this,
+            # any model-load failure (e.g. an invalid --llama-max-seq-len, a bad
+            # checkpoint, or OOM) would leave init_event unset forever and the
+            # caller hanging on init_event.wait().
+            init_error = exc
+            logger.error(
+                f"Model initialization failed: {exc}\n{traceback.format_exc()}"
+            )
+        finally:
+            init_event.set()
+
+        if init_error is not None:
+            return
 
         while True:
             item: GenerateRequest | None = input_queue.get()
@@ -795,6 +887,11 @@ def launch_thread_safe_queue(
 
     threading.Thread(target=worker, daemon=True).start()
     init_event.wait()
+
+    # Re-raise the worker's initialization error in the calling thread so a
+    # bad config fails startup loudly instead of silently hanging/continuing.
+    if init_error is not None:
+        raise init_error
 
     return input_queue
 

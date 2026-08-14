@@ -104,21 +104,53 @@ class Transformer(nn.Module):
         )
         self.norm = RMSNorm(config.dim, eps=config.norm_eps)
 
-        # Only compute RoPE frequencies if using RoPE
+        # Only compute RoPE frequencies if using RoPE. The table is sized to
+        # the configured block_size and grown on demand, so we never turn
+        # block_size into a hard audio-length limit and avoid preallocating a
+        # 327680-length table (tens of MiB) per transformer.
         if config.pos_embed_type == "rope":
             freqs_cis = precompute_freqs_cis(
-                327680, self.config.head_dim, self.config.rope_base
+                max(8, find_multiple(config.block_size, 8)),
+                self.config.head_dim,
+                self.config.rope_base,
             )
             self.register_buffer("freqs_cis", freqs_cis, persistent=False)
         else:
             self.register_buffer("freqs_cis", None)
 
-        causal_mask = torch.tril(torch.ones(32768, 32768, dtype=torch.bool))
-        self.register_buffer("causal_mask", causal_mask, persistent=False)
+        # causal_mask is intentionally NOT preallocated. The old code created a
+        # 32768x32768 bool buffer (~1 GiB) per transformer, but every
+        # WindowLimitedTransformer always builds and passes an explicit mask, so
+        # this buffer was pure dead weight. When no external mask is provided we
+        # build a small causal mask from the actual positions in forward().
+        self.register_buffer("causal_mask", None, persistent=False)
 
         self.max_batch_size = -1
         self.max_seq_length = -1
         self.use_kv_cache = False
+
+    def _ensure_freqs_cis_len(self, required_len: int) -> None:
+        """Ensure the RoPE table covers `required_len` positions, growing on
+        demand while preserving device/dtype.
+
+        `required_len` is a Python int (e.g. x.shape[1]) so the common path
+        never reads a CUDA scalar and never triggers a GPU->CPU sync. Only runs
+        when a sequence longer than the current capacity shows up, so normal TTS
+        keeps a tiny resident RoPE table while long reference audio or long
+        generations still work.
+        """
+        if self.freqs_cis is None or required_len <= self.freqs_cis.size(0):
+            return
+        new_len = find_multiple(required_len, 8)
+        new = precompute_freqs_cis(
+            new_len,
+            self.config.head_dim,
+            self.config.rope_base,
+            dtype=self.freqs_cis.dtype,
+        )
+        self.register_buffer(
+            "freqs_cis", new.to(device=self.freqs_cis.device), persistent=False
+        )
 
     def setup_caches(self, max_batch_size, max_seq_length):
         """
@@ -152,18 +184,29 @@ class Transformer(nn.Module):
             assert (
                 self.freqs_cis is not None
             ), "RoPE frequencies must be initialized for RoPE positional embedding"
-            # print("MAX", input_pos.max())
+            # Capacity is ensured by the caller (WindowLimitedTransformer) using
+            # a Python int x.shape[1], so indexing here never overruns. Do NOT
+            # add a size comparison against input_pos here: reading the CUDA
+            # scalar would force a device sync on the hot path.
             freqs_cis = self.freqs_cis[input_pos]
         else:
             freqs_cis = None
 
         if mask is None:  # in case of non-causal model
+            # Build a causal mask from the actual positions instead of slicing
+            # a huge preallocated 32768x32768 buffer. Semantics match the old
+            # cached/non-cached paths:
+            #   - KV-cache path: keys span the whole cached prefix up to the
+            #     current max position (1, 1, S, max+1)
+            #   - non-cache path: square causal mask over current positions
             if not self.training and self.use_kv_cache:
-                mask = self.causal_mask[None, None, input_pos]
-                mask = mask[..., : input_pos.max() + 1]
+                key_pos = torch.arange(
+                    input_pos.max() + 1, device=input_pos.device
+                )
+                mask = key_pos.unsqueeze(0) <= input_pos.unsqueeze(1)
             else:
-                mask = self.causal_mask[None, None, input_pos]
-                mask = mask[..., input_pos]
+                mask = input_pos.unsqueeze(1) >= input_pos.unsqueeze(0)
+            mask = mask[None, None]
 
         for i, layer in enumerate(self.layers):
             x = layer(x, input_pos, freqs_cis, mask)
@@ -425,6 +468,10 @@ class WindowLimitedTransformer(Transformer):
         x = self.input_proj(x)  # (B, T, D)
         x = self.look_ahead_conv(x)
         input_pos = torch.arange(x.shape[1], device=x.device)
+        # Ensure the RoPE table covers this sequence. x.shape[1] is a Python
+        # int, so this is a pure-host check with no GPU->CPU sync on the hot
+        # path; it only grows the table when a longer sequence appears.
+        self._ensure_freqs_cis_len(x.shape[1])
         # construct mask to form window limited attention
         max_length = x.shape[1]
         if self.window_size is not None:

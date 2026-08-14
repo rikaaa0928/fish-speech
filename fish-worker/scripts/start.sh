@@ -37,6 +37,13 @@ fi
 if [ -z "${API_SERVER_TTS_MAX_NEW_TOKENS+x}" ]; then
   export API_SERVER_TTS_MAX_NEW_TOKENS=1024
 fi
+# Worker deployment pins the LLAMA context cap to 8192 (multiple of 8) to cut
+# the one-time 32768-token KV cache + causal-mask VRAM. To keep the
+# checkpoint's original cap, explicitly set it to an empty string:
+#   API_SERVER_LLAMA_MAX_SEQ_LEN=
+if [ -z "${API_SERVER_LLAMA_MAX_SEQ_LEN+x}" ]; then
+  export API_SERVER_LLAMA_MAX_SEQ_LEN=8192
+fi
 if [ -z "${API_SERVER_COMPILE+x}" ]; then
   export API_SERVER_COMPILE=1
 fi

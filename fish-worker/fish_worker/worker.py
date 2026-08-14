@@ -157,6 +157,9 @@ class Worker:
                 "--speed-method",
                 self.config.api_server_speed_method,
             ]
+            if self.config.api_server_llama_max_seq_len is not None:
+                args.append("--llama-max-seq-len")
+                args.append(str(self.config.api_server_llama_max_seq_len))
             if self.config.api_server_compile:
                 args.append("--compile")
             if self.config.api_server_half:

@@ -102,6 +102,7 @@ class API(ExceptionHandler):
             decoder_checkpoint_path=self.args.decoder_checkpoint_path,
             decoder_config_name=self.args.decoder_config_name,
             speed_method=self.args.speed_method,
+            llama_max_seq_len=self.args.llama_max_seq_len,
         )
 
         logger.info(f"Startup done, listening server at http://{self.args.listen}")
