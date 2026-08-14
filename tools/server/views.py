@@ -42,7 +42,12 @@ from tools.server.api_utils import (
     get_content_type,
     inference_async,
 )
-from tools.server.inference import FinalAudio, inference_wrapper
+from tools.server.inference import (
+    FinalAudio,
+    TTS_OOM_ERROR_CODE,
+    TTS_TRUNCATED_ERROR_CODE,
+    inference_wrapper,
+)
 from tools.server.model_manager import ModelManager
 from tools.server.model_utils import (
     batch_vqgan_decode,
@@ -196,21 +201,34 @@ async def tts(req: Annotated[ServeTTSRequest, Body(exclusive=True)]):
                 else HTTPStatus.OK
             )
 
+            headers = {
+                "Content-Disposition": f"attachment; filename=audio.{req.format}",
+                "X-TTS-Finish-Reason": final_audio.finish_reason,
+                "X-TTS-Generated-Tokens": str(final_audio.generated_tokens),
+                "X-TTS-Max-New-Tokens": str(final_audio.max_new_tokens),
+                "X-TTS-Input-Characters": str(final_audio.input_characters),
+            }
+            if final_audio.finish_reason == "length":
+                headers["X-TTS-Error-Code"] = TTS_TRUNCATED_ERROR_CODE
+
             return StreamResponse(
                 iterable=buffer_to_async_generator(buffer.getvalue()),
-                headers={
-                    "Content-Disposition": f"attachment; filename=audio.{req.format}",
-                    "X-TTS-Finish-Reason": final_audio.finish_reason,
-                    "X-TTS-Generated-Tokens": str(final_audio.generated_tokens),
-                    "X-TTS-Max-New-Tokens": str(final_audio.max_new_tokens),
-                    "X-TTS-Input-Characters": str(final_audio.input_characters),
-                },
+                headers=headers,
                 content_type=get_content_type(req.format),
                 status_code=status_code,
             )
     except HTTPException:
         # Re-raise HTTP exceptions as they are already properly formatted
         raise
+    except torch.OutOfMemoryError as e:
+        logger.error(f"TTS generation ran out of GPU memory: {e}", exc_info=True)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        raise HTTPException(
+            HTTPStatus.INSUFFICIENT_STORAGE,
+            content="TTS generation ran out of GPU memory",
+            headers={"X-TTS-Error-Code": TTS_OOM_ERROR_CODE},
+        )
     except Exception as e:
         logger.error(f"Error in TTS generation: {e}", exc_info=True)
         raise HTTPException(

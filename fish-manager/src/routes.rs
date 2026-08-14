@@ -1101,6 +1101,7 @@ fn log_speech_completed(
         generated_tokens = ?done.generated_tokens,
         max_new_tokens = ?done.max_new_tokens,
         worker_input_characters = ?done.input_characters,
+        error_code = ?done.error_code,
         total_ms = elapsed_ms(trace.started),
         manager_reference_ms = trace.manager_reference_ms,
         manager_dispatch_ms = dispatch.dispatch_ms(),
@@ -1142,6 +1143,8 @@ fn error_to_app_error(error: InferenceError) -> AppError {
         AppError::TooManyRequests(error.message)
     } else if error.code == "bad_request" {
         AppError::BadRequest(error.message)
+    } else if error.code == "tts_out_of_memory" {
+        AppError::TtsOutOfMemory(error.message)
     } else {
         AppError::Upstream(error.message)
     }
@@ -1182,6 +1185,9 @@ fn add_tts_completion_headers(
     if let Some(value) = done.input_characters {
         insert_header(headers, "x-tts-input-characters", value)?;
     }
+    if let Some(value) = &done.error_code {
+        insert_header(headers, "x-tts-error-code", value)?;
+    }
     Ok(())
 }
 
@@ -1194,6 +1200,36 @@ fn decode_audio(input: &str) -> AppResult<Vec<u8>> {
     STANDARD
         .decode(payload)
         .map_err(|_| AppError::BadRequest("reference audio is not valid base64".to_string()))
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    use crate::protocol::InferenceDone;
+
+    #[test]
+    fn truncated_audio_exposes_stable_error_code_header() {
+        let done = InferenceDone {
+            request_id: "truncated-request".to_string(),
+            timings: None,
+            audio_bytes: Some(1234),
+            chunks: Some(1),
+            http_status: Some(206),
+            finish_reason: Some("length".to_string()),
+            generated_tokens: Some(4096),
+            max_new_tokens: Some(4096),
+            input_characters: Some(400),
+            error_code: Some("tts_output_truncated".to_string()),
+        };
+        let mut headers = HeaderMap::new();
+
+        add_tts_completion_headers(&mut headers, &done).expect("headers should be valid");
+
+        assert_eq!(
+            headers.get("x-tts-error-code").and_then(|value| value.to_str().ok()),
+            Some("tts_output_truncated")
+        );
+    }
 }
 
 async fn admin_get_metrics(

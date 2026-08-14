@@ -213,3 +213,7 @@ BF16 在加载和 warmup 阶段的 allocated 比 FP32 低约 0.73 GiB。表中�
 | 16384 | 5120 | 750 字 | HTTP 500，OOM | 语义阶段已生成 4089 tokens | DAC 解码需再分配约 1.50 GiB，仅余约 1.31 GiB |
 
 结论：在 24 GB RTX 3090、FP32 codec、83.52 秒参考音频条件下，`8192 + 4096` 是本轮测得的实用上限，可完整处理约 600 字。`4096` 仅少约 0.6 GiB 启动驻留，却因长参考占用 prompt 而把可处理长度压回约 300 字；`16384` 比 8192 多约 1.3 GiB 驻留、速度下降约 14%，没有提高已验证的完整文本长度。750 字档的瓶颈已经变为一次性 DAC 解码，而不是 LLAMA context；继续增大到 32768 只会增加常驻显存，因此未重复执行必然更不利的 5120 压力档。
+
+Worker 部署默认值最终调整为 `max_seq_len=8192`、`max_new_tokens=4096`，生产应用层限制普通中文输入约 400 字。直连 API 的请求默认 `max_new_tokens=4096`，但直连 CLI 的 LLAMA context 仍需通过 `--llama-max-seq-len 8192` 显式设置。非流式截断由 Manager 返回 HTTP 206、可播放音频及 `X-TTS-Error-Code: tts_output_truncated`；GPU OOM 由 Manager 返回 HTTP 507 JSON，`error.code=tts_out_of_memory`，不会按普通上游故障自动重试。
+
+协议字段全部为可选并带 serde default，支持滚动升级：新 Manager 接旧 Worker 时缺失完成元数据会回退旧行为；旧 Manager 会忽略新 Worker 增加的完成元数据。精确的截断/OOM 错误码仅在 Manager 与 Worker 都升级后生效。

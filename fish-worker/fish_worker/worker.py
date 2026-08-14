@@ -671,6 +671,7 @@ class Worker:
                     finish_reason=result["finish_reason"],
                     generated_tokens=result["generated_tokens"],
                     max_new_tokens=result["max_new_tokens"],
+                    error_code=result["error_code"],
                 )
                 await send_msg(
                     ws,
@@ -685,6 +686,7 @@ class Worker:
                         "generated_tokens": result["generated_tokens"],
                         "max_new_tokens": result["max_new_tokens"],
                         "input_characters": result["input_characters"],
+                        "error_code": result["error_code"],
                     },
                 )
         except aiohttp.ClientError as exc:

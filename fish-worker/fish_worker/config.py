@@ -15,9 +15,11 @@ def env_int(name: str, default: int) -> int:
     return int(value)
 
 
-def env_optional_int(name: str) -> int | None:
+def env_optional_int(name: str, default: int | None = None) -> int | None:
     value = os.getenv(name)
-    if value is None or value == "":
+    if value is None:
+        return default
+    if value == "":
         return None
     return int(value)
 
@@ -125,8 +127,12 @@ class Config:
             api_server_max_running_requests=max(1, env_int("API_SERVER_MAX_RUNNING_REQUESTS", 1)),
             api_server_max_queued_requests=v3_queue_limit,
             api_server_max_queued_requests_by_priority=priority_queue_limits(v3_queue_limit),
-            api_server_tts_max_new_tokens=env_optional_int("API_SERVER_TTS_MAX_NEW_TOKENS"),
-            api_server_llama_max_seq_len=env_optional_int("API_SERVER_LLAMA_MAX_SEQ_LEN"),
+            api_server_tts_max_new_tokens=env_optional_int(
+                "API_SERVER_TTS_MAX_NEW_TOKENS", 4096
+            ),
+            api_server_llama_max_seq_len=env_optional_int(
+                "API_SERVER_LLAMA_MAX_SEQ_LEN", 8192
+            ),
             api_server_decoder_checkpoint_path=Path(
                 os.getenv("API_SERVER_DECODER_CHECKPOINT_PATH")
                 or os.getenv("DECODER_CHECKPOINT_PATH", "/models/s2-pro/codec.pth")

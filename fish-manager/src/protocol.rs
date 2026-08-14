@@ -177,6 +177,8 @@ pub struct InferenceDone {
     pub max_new_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_characters: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +219,7 @@ pub struct RestartWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[test]
     fn heartbeat_accepts_workers_without_character_metrics() {
@@ -258,5 +261,30 @@ mod tests {
         assert_eq!(done.generated_tokens, None);
         assert_eq!(done.max_new_tokens, None);
         assert_eq!(done.input_characters, None);
+        assert_eq!(done.error_code, None);
+    }
+
+    #[test]
+    fn legacy_manager_shape_ignores_new_completion_metadata() {
+        #[derive(Deserialize)]
+        struct LegacyInferenceDone {
+            request_id: String,
+            audio_bytes: Option<u64>,
+            chunks: Option<u64>,
+        }
+
+        let legacy: LegacyInferenceDone = serde_json::from_value(serde_json::json!({
+            "request_id": "new-worker-request",
+            "audio_bytes": 4321,
+            "chunks": 1,
+            "http_status": 206,
+            "finish_reason": "length",
+            "error_code": "tts_output_truncated"
+        }))
+        .expect("legacy manager shape should ignore new worker fields");
+
+        assert_eq!(legacy.request_id, "new-worker-request");
+        assert_eq!(legacy.audio_bytes, Some(4321));
+        assert_eq!(legacy.chunks, Some(1));
     }
 }

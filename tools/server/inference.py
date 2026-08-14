@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 
 import numpy as np
+import torch
 from kui.asgi import HTTPException
 
 from fish_speech.inference_engine import TTSInferenceEngine
@@ -9,6 +10,8 @@ from fish_speech.models.text2semantic.inference import ContextLengthExceededErro
 from fish_speech.utils.schema import ServeTTSRequest
 
 AMPLITUDE = 32768  # Needs an explaination
+TTS_OOM_ERROR_CODE = "tts_out_of_memory"
+TTS_TRUNCATED_ERROR_CODE = "tts_output_truncated"
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,14 @@ def inference_wrapper(req: ServeTTSRequest, engine: TTSInferenceEngine):
                     )
 
             case "error":
+                if isinstance(result.error, torch.OutOfMemoryError):
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    raise HTTPException(
+                        HTTPStatus.INSUFFICIENT_STORAGE,
+                        content="TTS generation ran out of GPU memory",
+                        headers={"X-TTS-Error-Code": TTS_OOM_ERROR_CODE},
+                    )
                 status = (
                     HTTPStatus.UNPROCESSABLE_ENTITY
                     if isinstance(result.error, ContextLengthExceededError)

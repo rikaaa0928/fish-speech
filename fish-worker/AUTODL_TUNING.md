@@ -2,7 +2,20 @@
 
 This note records the worker settings tested with Fish API server and `fishaudio/s2-pro`, plus the knobs to tune for speed, concurrency, and longer generations.
 
-## Verified Baseline
+## Current 24GB Default
+
+The current FP32 codec default, validated on RTX 3090 24GB with one concurrent request, is:
+
+```bash
+API_SERVER_LLAMA_MAX_SEQ_LEN=8192
+API_SERVER_TTS_MAX_NEW_TOKENS=4096
+API_SERVER_MAX_RUNNING_REQUESTS=1
+API_SERVER_WORKERS=1
+```
+
+The application layer should limit normal Chinese input to about 400 characters. Generation-limit truncation returns HTTP 206 with `X-TTS-Error-Code: tts_output_truncated`; GPU OOM returns an explicit `tts_out_of_memory` error through the manager.
+
+## Historical Baseline
 
 4090D 24GB, tested 2026-06-16:
 
@@ -64,7 +77,7 @@ Uvicorn worker count. Keep `1` unless each worker process can fit a full model c
 
 `API_SERVER_MAX_TEXT_LENGTH`
 
-Server-side text length guard. `0` disables it. On 24GB GPUs, use around `240` if you want to reject risky long requests before generation.
+Server-side text length guard. `0` disables it. For the current `8192/4096` FP32 configuration, limit normal Chinese input to about `400` characters at the application layer.
 
 ## Recommended Startup
 
@@ -75,7 +88,8 @@ API_SERVER_COMPILE=1 \
 API_SERVER_HALF=0 \
 API_SERVER_MAX_RUNNING_REQUESTS=1 \
 API_SERVER_MAX_QUEUED_REQUESTS=1 \
-API_SERVER_TTS_MAX_NEW_TOKENS=1024 \
+API_SERVER_TTS_MAX_NEW_TOKENS=4096 \
+API_SERVER_LLAMA_MAX_SEQ_LEN=8192 \
 API_SERVER_WORKERS=1 \
 PYTORCH_ALLOC_CONF=expandable_segments:True \
 bash scripts/autodl_start_worker.sh
@@ -84,7 +98,7 @@ bash scripts/autodl_start_worker.sh
 Conservative long-text guard:
 
 ```bash
-API_SERVER_MAX_TEXT_LENGTH=240 bash scripts/autodl_start_worker.sh
+API_SERVER_MAX_TEXT_LENGTH=400 bash scripts/autodl_start_worker.sh
 ```
 
 Allow a small local queue:
@@ -120,7 +134,7 @@ Try these in order:
 1. Set `API_SERVER_HALF=0`.
 2. Set `API_SERVER_WORKERS=1`.
 3. Set `API_SERVER_COMPILE=0`.
-4. Lower `API_SERVER_TTS_MAX_NEW_TOKENS`, for example `1024 -> 512`.
+4. Lower `API_SERVER_TTS_MAX_NEW_TOKENS`, for example `4096 -> 3072`.
 5. Keep `API_SERVER_MAX_RUNNING_REQUESTS=1`; lower `API_SERVER_MAX_QUEUED_REQUESTS` to `0` if overload should be rejected immediately.
 6. Check for orphan GPU processes with `nvidia-smi` and stop only stale worker/API server processes from the previous run.
 

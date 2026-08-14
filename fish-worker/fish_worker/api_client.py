@@ -13,6 +13,14 @@ if TYPE_CHECKING:
     from fish_worker.worker import Worker
 
 
+def classify_api_error(status: int, upstream_error_code: str | None) -> tuple[str, bool]:
+    if upstream_error_code == "tts_out_of_memory" or status == 507:
+        return "tts_out_of_memory", False
+    if status < 500:
+        return "bad_request", False
+    return "sglang_unavailable", True
+
+
 async def call_api_server(
     worker: "Worker",
     ws: Any,
@@ -45,7 +53,10 @@ async def call_api_server(
                 return None
             if response.status >= 400:
                 text = await response.text()
-                code = "bad_request" if response.status < 500 else "sglang_unavailable"
+                upstream_error_code = response.headers.get("x-tts-error-code")
+                code, retryable = classify_api_error(
+                    response.status, upstream_error_code
+                )
                 log(
                     "Fish API server inference failed",
                     request_id=request_id,
@@ -55,11 +66,12 @@ async def call_api_server(
                 )
                 if response.status >= 500:
                     await worker.record_api_server_failure(f"inference HTTP {response.status}: {text[:200]}")
-                await send_error(ws, request_id, code, text, retryable=response.status >= 500)
+                await send_error(ws, request_id, code, text, retryable=retryable)
                 return None
 
             content_type = response.headers.get("content-type", "application/octet-stream")
             finish_reason = response.headers.get("x-tts-finish-reason")
+            error_code = response.headers.get("x-tts-error-code")
 
             def optional_int_header(name: str) -> int | None:
                 value = response.headers.get(name)
@@ -117,6 +129,7 @@ async def call_api_server(
                 generated_tokens=generated_tokens,
                 max_new_tokens=max_new_tokens,
                 input_characters=input_characters,
+                error_code=error_code,
             )
             worker.api_server_watchdog_failures = 0
             return {
@@ -128,6 +141,7 @@ async def call_api_server(
                 "generated_tokens": generated_tokens,
                 "max_new_tokens": max_new_tokens,
                 "input_characters": input_characters,
+                "error_code": error_code,
                 "timings": {
                     "total_ms": 0.0,
                     "reference_ms": 0.0,

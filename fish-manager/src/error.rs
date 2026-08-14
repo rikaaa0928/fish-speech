@@ -19,6 +19,8 @@ pub enum AppError {
     TooManyRequests(String),
     #[error("upstream error: {0}")]
     Upstream(String),
+    #[error("TTS GPU out of memory: {0}")]
+    TtsOutOfMemory(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -57,6 +59,11 @@ impl IntoResponse for AppError {
             AppError::Upstream(message) => {
                 (StatusCode::BAD_GATEWAY, message.clone(), "upstream_error")
             }
+            AppError::TtsOutOfMemory(message) => (
+                StatusCode::INSUFFICIENT_STORAGE,
+                message.clone(),
+                "tts_out_of_memory",
+            ),
             AppError::Internal(error) => {
                 tracing::error!(?error, "internal error");
                 (
@@ -92,3 +99,16 @@ impl IntoResponse for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tts_oom_has_stable_manager_status() {
+        let response = AppError::TtsOutOfMemory("GPU memory exhausted".to_string())
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::INSUFFICIENT_STORAGE);
+    }
+}
