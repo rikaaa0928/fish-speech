@@ -52,13 +52,20 @@ async fn handle_worker_socket(state: AppState, mut socket: WebSocket) {
     let version = hello.version.clone();
     let model_id = hello.model_id.clone();
     let model_revision = hello.model_revision.clone();
+    let models = if !hello.models.is_empty() {
+        hello.models.clone()
+    } else if !hello.model_id.trim().is_empty() {
+        vec![hello.model_id.clone()]
+    } else {
+        vec![state.config.default_model.clone()]
+    };
     let gpu_name = hello.gpu_name.clone();
     let gpu_count = hello.gpu_count;
     let sglang_url = hello.sglang_url.clone();
     let connection_id = Uuid::new_v4().simple().to_string();
     let (tx, mut rx) = mpsc::channel::<WireMessage>(128);
     let manager_inflight = Arc::new(AtomicU32::new(0));
-    let status = Arc::new(RwLock::new(status_from_hello(hello, connection_id.clone())));
+    let status = Arc::new(RwLock::new(status_from_hello(hello, connection_id.clone(), &state.config.default_model)));
     let handle = WorkerHandle {
         worker_id: worker_id.clone(),
         connection_id: connection_id.clone(),
@@ -84,6 +91,7 @@ async fn handle_worker_socket(state: AppState, mut socket: WebSocket) {
         connection_id = %connection_id,
         version = %version,
         model_id = %model_id,
+        models = ?models,
         model_revision = ?model_revision,
         gpu_name = ?gpu_name,
         gpu_count,
@@ -336,8 +344,15 @@ async fn fail_pending_for_worker(state: &AppState, worker_id: &str, connection_i
     failed_pending
 }
 
-fn status_from_hello(hello: WorkerHello, connection_id: String) -> WorkerStatus {
+fn status_from_hello(hello: WorkerHello, connection_id: String, default_model: &str) -> WorkerStatus {
     let now = Utc::now();
+    let models = if !hello.models.is_empty() {
+        hello.models
+    } else if !hello.model_id.trim().is_empty() {
+        vec![hello.model_id.clone()]
+    } else {
+        vec![default_model.to_string()]
+    };
     WorkerStatus {
         worker_id: hello.worker_id,
         workload_metrics_version: 0,
@@ -345,6 +360,7 @@ fn status_from_hello(hello: WorkerHello, connection_id: String) -> WorkerStatus 
         version: hello.version,
         model_id: hello.model_id,
         model_revision: hello.model_revision,
+        models,
         gpu_name: hello.gpu_name,
         gpu_count: hello.gpu_count,
         vram_total_mb: hello.vram_total_mb,

@@ -77,6 +77,8 @@ pub struct WorkerHello {
     pub version: String,
     pub model_id: String,
     pub model_revision: Option<String>,
+    #[serde(default)]
+    pub models: Vec<String>,
     pub gpu_name: Option<String>,
     pub gpu_count: u32,
     pub vram_total_mb: Option<u64>,
@@ -99,6 +101,8 @@ pub struct Heartbeat {
     pub sglang_healthy: bool,
     pub inflight: u32,
     pub queued: u32,
+    #[serde(default)]
+    pub models: Option<Vec<String>>,
     #[serde(default)]
     pub queued_by_priority: PriorityCounts,
     #[serde(default)]
@@ -181,11 +185,15 @@ pub struct InferenceDone {
     pub error_code: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InferenceTimings {
+    #[serde(default)]
     pub total_ms: f64,
+    #[serde(default)]
     pub reference_ms: f64,
+    #[serde(default)]
     pub sglang_ms: f64,
+    #[serde(default)]
     pub chunk_send_ms: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_chunk_ms: Option<f64>,
@@ -219,7 +227,6 @@ pub struct RestartWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
 
     #[test]
     fn heartbeat_accepts_workers_without_character_metrics() {
@@ -265,26 +272,67 @@ mod tests {
     }
 
     #[test]
-    fn legacy_manager_shape_ignores_new_completion_metadata() {
-        #[derive(Deserialize)]
-        struct LegacyInferenceDone {
-            request_id: String,
-            audio_bytes: Option<u64>,
-            chunks: Option<u64>,
-        }
-
-        let legacy: LegacyInferenceDone = serde_json::from_value(serde_json::json!({
-            "request_id": "new-worker-request",
-            "audio_bytes": 4321,
-            "chunks": 1,
-            "http_status": 206,
-            "finish_reason": "length",
-            "error_code": "tts_output_truncated"
+    fn worker_hello_accepts_legacy_worker_without_models() {
+        let hello: WorkerHello = serde_json::from_value(serde_json::json!({
+            "worker_id": "legacy-worker",
+            "version": "0.1.0",
+            "model_id": "fishaudio/s2-pro",
+            "model_revision": null,
+            "gpu_name": "RTX 4090",
+            "gpu_count": 1,
+            "vram_total_mb": 24564,
+            "max_running_requests": 2,
+            "max_queued_requests": 4,
+            "worker_max_inflight": 2,
+            "worker_max_queue": 4,
+            "sglang_url": "http://127.0.0.1:8000",
+            "started_at": "2026-08-14T00:00:00Z"
         }))
-        .expect("legacy manager shape should ignore new worker fields");
+        .expect("legacy worker_hello should deserialize");
 
-        assert_eq!(legacy.request_id, "new-worker-request");
-        assert_eq!(legacy.audio_bytes, Some(4321));
-        assert_eq!(legacy.chunks, Some(1));
+        assert_eq!(hello.model_id, "fishaudio/s2-pro");
+        assert!(hello.models.is_empty());
+    }
+
+    #[test]
+    fn worker_hello_accepts_new_worker_with_models() {
+        let hello: WorkerHello = serde_json::from_value(serde_json::json!({
+            "worker_id": "index-worker-1",
+            "version": "0.2.0",
+            "model_id": "index-tts-2.5",
+            "models": ["index-tts-2.5", "index-tts"],
+            "model_revision": null,
+            "gpu_name": "RTX 4090",
+            "gpu_count": 1,
+            "vram_total_mb": 24564,
+            "max_running_requests": 2,
+            "max_queued_requests": 4,
+            "worker_max_inflight": 2,
+            "worker_max_queue": 4,
+            "sglang_url": "http://127.0.0.1:8000",
+            "started_at": "2026-08-14T00:00:00Z"
+        }))
+        .expect("new worker_hello should deserialize");
+
+        assert_eq!(hello.models, vec!["index-tts-2.5", "index-tts"]);
+    }
+
+    #[test]
+    fn inference_done_accepts_timings_with_missing_fields() {
+        let done: InferenceDone = serde_json::from_value(serde_json::json!({
+            "request_id": "req-1",
+            "audio_bytes": 1024,
+            "chunks": 1,
+            "timings": {
+                "total_ms": 120.5
+            }
+        }))
+        .expect("inference_done with partial timings should deserialize");
+
+        let timings = done.timings.expect("timings should be present");
+        assert_eq!(timings.total_ms, 120.5);
+        assert_eq!(timings.reference_ms, 0.0);
+        assert_eq!(timings.sglang_ms, 0.0);
+        assert_eq!(timings.chunk_send_ms, 0.0);
     }
 }

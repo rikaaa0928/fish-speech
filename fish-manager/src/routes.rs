@@ -379,23 +379,161 @@ async fn get_internal_voice_audio(
     Ok(response)
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+struct IndexExtraParams {
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lang: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text_normalization: Option<bool>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_vector: Option<Vec<f64>>,
+    #[serde(default)]
+    #[serde(alias = "emo_weight")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_alpha: Option<f64>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_text: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "auto_emotion")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    use_emo_text: Option<bool>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_audio: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_audio_base64: Option<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Value>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct AudioSpeechRequest {
     input: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
     #[serde(default)]
     #[serde(alias = "voice_id")]
     #[serde(skip_serializing_if = "Option::is_none")]
     voice: Option<String>,
     #[serde(default)]
+    #[serde(alias = "reference_audio")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ref_audio: Option<String>,
+    #[serde(default)]
     references: Vec<ClientReference>,
     #[serde(default)]
+    #[serde(alias = "format")]
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<String>,
     #[serde(default)]
+    #[serde(alias = "streaming")]
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speed: Option<f64>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_factor: Option<f64>,
+
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extra_params: Option<IndexExtraParams>,
+
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lang: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text_normalization: Option<bool>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_audio: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_audio_base64: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "emo_weight")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_alpha: Option<f64>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_vector: Option<Vec<f64>>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emo_text: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "auto_emotion")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    use_emo_text: Option<bool>,
     #[serde(flatten)]
     extra: serde_json::Map<String, Value>,
+}
+
+impl AudioSpeechRequest {
+    fn resolved_lang(&self) -> Option<&str> {
+        self.extra_params
+            .as_ref()
+            .and_then(|p| p.lang.as_deref())
+            .or(self.lang.as_deref())
+    }
+
+    fn resolved_text_normalization(&self) -> bool {
+        self.extra_params
+            .as_ref()
+            .and_then(|p| p.text_normalization)
+            .or(self.text_normalization)
+            .unwrap_or(true)
+    }
+
+    fn resolved_emo_vector(&self) -> Option<&[f64]> {
+        self.extra_params
+            .as_ref()
+            .and_then(|p| p.emo_vector.as_deref())
+            .or(self.emo_vector.as_deref())
+    }
+
+    fn resolved_emo_alpha(&self) -> Option<f64> {
+        self.extra_params
+            .as_ref()
+            .and_then(|p| p.emo_alpha)
+            .or(self.emo_alpha)
+    }
+
+    fn resolved_emo_text(&self) -> Option<&str> {
+        self.extra_params
+            .as_ref()
+            .and_then(|p| p.emo_text.as_deref())
+            .or(self.emo_text.as_deref())
+    }
+
+    fn resolved_use_emo_text(&self) -> Option<bool> {
+        self.extra_params
+            .as_ref()
+            .and_then(|p| p.use_emo_text)
+            .or(self.use_emo_text)
+            .or_else(|| {
+                if self.resolved_emo_text().is_some() {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn resolved_emo_audio(&self) -> Option<&str> {
+        self.extra_params
+            .as_ref()
+            .and_then(|p| p.emo_audio.as_deref().or(p.emo_audio_base64.as_deref()))
+            .or(self.emo_audio.as_deref())
+            .or(self.emo_audio_base64.as_deref())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -412,16 +550,53 @@ struct ClientReference {
 }
 
 #[derive(Debug, Deserialize)]
+struct Prosody {
+    #[serde(default)]
+    speed: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct FishTtsRequest {
     text: String,
     #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
     reference_id: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "reference_audio")]
+    ref_audio: Option<String>,
     #[serde(default)]
     references: Vec<ClientReference>,
     #[serde(default)]
     format: Option<String>,
     #[serde(default)]
     streaming: Option<bool>,
+    #[serde(default)]
+    speed: Option<f64>,
+    #[serde(default)]
+    duration_factor: Option<f64>,
+    #[serde(default)]
+    extra_params: Option<IndexExtraParams>,
+    #[serde(default)]
+    emo_audio: Option<String>,
+    #[serde(default)]
+    emo_audio_base64: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "emo_weight")]
+    emo_alpha: Option<f64>,
+    #[serde(default)]
+    emo_vector: Option<Vec<f64>>,
+    #[serde(default)]
+    emo_text: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "auto_emotion")]
+    use_emo_text: Option<bool>,
+    #[serde(default)]
+    lang: Option<String>,
+    #[serde(default)]
+    text_normalization: Option<bool>,
+    #[serde(default)]
+    prosody: Option<Prosody>,
     #[serde(flatten)]
     extra: serde_json::Map<String, Value>,
 }
@@ -435,12 +610,27 @@ async fn fish_tts(
     require_openai_auth_for_priority(&headers, &state.config, priority)?;
     let target_worker_id = target_worker_id_from_headers(&headers)?;
 
+    let speed = request.speed.or_else(|| request.prosody.as_ref().and_then(|p| p.speed));
+
     let mapped = AudioSpeechRequest {
         input: request.text,
+        model: request.model,
         voice: request.reference_id,
+        ref_audio: request.ref_audio,
         references: request.references,
         response_format: request.format,
         stream: request.streaming,
+        speed,
+        duration_factor: request.duration_factor,
+        extra_params: request.extra_params,
+        emo_audio: request.emo_audio,
+        emo_audio_base64: request.emo_audio_base64,
+        emo_alpha: request.emo_alpha,
+        emo_vector: request.emo_vector,
+        emo_text: request.emo_text,
+        use_emo_text: request.use_emo_text,
+        lang: request.lang,
+        text_normalization: request.text_normalization,
         extra: request.extra,
     };
 
@@ -469,7 +659,9 @@ async fn handle_speech(
     if request.input.trim().is_empty() {
         return Err(AppError::BadRequest("input must not be empty".to_string()));
     }
+    validate_speech_parameters(&request)?;
 
+    let target_model = state.resolve_target_model(request.model.as_deref()).await;
     let stream_response = request.stream.unwrap_or(false);
     let input_chars = request.input.chars().count();
     let reference_started = Instant::now();
@@ -478,6 +670,7 @@ async fn handle_speech(
         Err(error) => {
             tracing::warn!(
                 api_kind,
+                target_model = %target_model,
                 stream = stream_response,
                 input_chars,
                 total_ms = elapsed_ms(started),
@@ -491,6 +684,7 @@ async fn handle_speech(
     let reference_summary = reference_summary(&references);
     tracing::info!(
         api_kind,
+        target_model = %target_model,
         stream = stream_response,
         input_chars,
         references = reference_summary.total,
@@ -502,10 +696,11 @@ async fn handle_speech(
         manager_reference_ms,
         "accepted speech request"
     );
-    let payload = normalized_payload(&request)?;
+    let payload = normalized_payload(&request, &target_model)?;
     let trace = SpeechTrace {
         started,
         api_kind: api_kind.to_string(),
+        target_model,
         input_chars,
         stream: stream_response,
         manager_reference_ms,
@@ -547,6 +742,33 @@ async fn resolve_references(
             content_type: voice.content_type,
             text: voice.text,
         });
+    }
+
+    if let Some(ref_audio) = &request.ref_audio {
+        let trimmed = ref_audio.trim();
+        if !trimmed.is_empty() {
+            if trimmed.starts_with("data:")
+                || (!trimmed.starts_with("http://")
+                    && !trimmed.starts_with("https://")
+                    && !trimmed.starts_with("file://")
+                    && !trimmed.starts_with('/')
+                    && !trimmed.contains('\n'))
+            {
+                if let Ok(audio_bytes) = decode_audio(trimmed) {
+                    tracing::info!(
+                        size_bytes = audio_bytes.len(),
+                        "resolved ref_audio base64 / data URL reference"
+                    );
+                    references.push(InternalReference {
+                        voice_id: None,
+                        checksum: None,
+                        audio_bytes,
+                        content_type: "audio/wav".to_string(),
+                        text: "".to_string(),
+                    });
+                }
+            }
+        }
     }
 
     for reference in &request.references {
@@ -620,7 +842,52 @@ fn priority_from_headers(headers: &HeaderMap) -> AppResult<Priority> {
     })
 }
 
-fn normalized_payload(request: &AudioSpeechRequest) -> AppResult<Value> {
+fn validate_speech_parameters(request: &AudioSpeechRequest) -> AppResult<()> {
+    if let Some(speed) = request.speed {
+        if !(0.5..=2.0).contains(&speed) {
+            return Err(AppError::BadRequest(
+                "speed must be between 0.5 and 2.0".to_string(),
+            ));
+        }
+    }
+    if let Some(df) = request.duration_factor {
+        if !(0.5..=2.0).contains(&df) {
+            return Err(AppError::BadRequest(
+                "duration_factor must be between 0.5 and 2.0".to_string(),
+            ));
+        }
+    }
+    if let Some(alpha) = request.resolved_emo_alpha() {
+        if !(0.0..=1.0).contains(&alpha) {
+            return Err(AppError::BadRequest(
+                "emo_alpha must be between 0.0 and 1.0".to_string(),
+            ));
+        }
+    }
+    if let Some(vec) = request.resolved_emo_vector() {
+        if vec.len() != 8 {
+            return Err(AppError::BadRequest(
+                "emo_vector must contain exactly 8 elements".to_string(),
+            ));
+        }
+    }
+    if let Some(lang) = request.resolved_lang() {
+        let upper = lang.trim().to_ascii_uppercase();
+        if !["ZH", "EN", "JA", "ES", "AR", "ZHEN"].contains(&upper.as_str()) {
+            return Err(AppError::BadRequest(
+                format!("lang '{}' is not supported (allowed: zh, en, ja, es, ar, zhen)", lang),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_fish_model(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.contains("fish") || lower.contains("s2-pro")
+}
+
+fn normalized_payload(request: &AudioSpeechRequest, target_model: &str) -> AppResult<Value> {
     let mut payload = serde_json::to_value(request).map_err(anyhow::Error::from)?;
     let object = payload
         .as_object_mut()
@@ -628,6 +895,63 @@ fn normalized_payload(request: &AudioSpeechRequest) -> AppResult<Value> {
     object.remove("voice");
     object.remove("voice_id");
     object.remove("references");
+    if is_fish_model(target_model) {
+        object.remove("ref_audio");
+        object.remove("reference_audio");
+        object.remove("extra_params");
+        object.remove("emo_audio");
+        object.remove("emo_audio_base64");
+        object.remove("emo_alpha");
+        object.remove("emo_weight");
+        object.remove("emo_vector");
+        object.remove("emo_text");
+        object.remove("use_emo_text");
+        object.remove("auto_emotion");
+        object.remove("duration_factor");
+        object.remove("lang");
+        object.remove("text_normalization");
+    } else {
+        let mut extra_map = match object.get("extra_params").and_then(|v| v.as_object()).cloned() {
+            Some(m) => m,
+            None => serde_json::Map::new(),
+        };
+
+        if let Some(lang) = request.resolved_lang() {
+            extra_map.insert("lang".to_string(), Value::String(lang.to_string()));
+            object.insert("lang".to_string(), Value::String(lang.to_string()));
+        }
+        let norm = request.resolved_text_normalization();
+        extra_map.insert("text_normalization".to_string(), Value::Bool(norm));
+        object.insert("text_normalization".to_string(), Value::Bool(norm));
+
+        if let Some(vec) = request.resolved_emo_vector() {
+            let v = serde_json::to_value(vec).unwrap_or(Value::Null);
+            extra_map.insert("emo_vector".to_string(), v.clone());
+            object.insert("emo_vector".to_string(), v);
+        }
+        if let Some(alpha) = request.resolved_emo_alpha() {
+            let v = Value::from(alpha);
+            extra_map.insert("emo_alpha".to_string(), v.clone());
+            object.insert("emo_alpha".to_string(), v);
+        }
+        if let Some(txt) = request.resolved_emo_text() {
+            let v = Value::String(txt.to_string());
+            extra_map.insert("emo_text".to_string(), v.clone());
+            object.insert("emo_text".to_string(), v);
+        }
+        if let Some(use_txt) = request.resolved_use_emo_text() {
+            let v = Value::Bool(use_txt);
+            extra_map.insert("use_emo_text".to_string(), v.clone());
+            object.insert("use_emo_text".to_string(), v);
+        }
+        if let Some(aud) = request.resolved_emo_audio() {
+            let v = Value::String(aud.to_string());
+            extra_map.insert("emo_audio".to_string(), v.clone());
+            object.insert("emo_audio".to_string(), v);
+        }
+
+        object.insert("extra_params".to_string(), Value::Object(extra_map));
+    }
     Ok(payload)
 }
 
@@ -909,7 +1233,7 @@ async fn dispatch_once(
         let worker = if let Some(worker_id) = &trace.target_worker_id {
             state.select_worker_by_id(worker_id).await?
         } else {
-            state.select_worker(exclude, trace.priority).await?
+            state.select_worker(&trace.target_model, exclude, trace.priority).await?
         };
         let request_id = format!("req_{}", Uuid::new_v4().simple());
         let (tx, rx) = mpsc::channel(128);
@@ -938,6 +1262,7 @@ async fn dispatch_once(
             worker_id = %worker.worker_id,
             connection_id = %worker.connection_id,
             request_id = %request_id,
+            target_model = %trace.target_model,
             api_kind = %api_kind,
             priority = %trace.priority.as_str(),
             stream,
@@ -1041,6 +1366,7 @@ impl DispatchMetrics for DispatchTiming {
 struct SpeechTrace {
     started: Instant,
     api_kind: String,
+    target_model: String,
     input_chars: usize,
     stream: bool,
     manager_reference_ms: f64,
@@ -1229,6 +1555,154 @@ mod completion_tests {
             headers.get("x-tts-error-code").and_then(|value| value.to_str().ok()),
             Some("tts_output_truncated")
         );
+    }
+
+    #[test]
+    fn normalized_payload_strips_index_params_for_fish_model() {
+        let request = AudioSpeechRequest {
+            input: "[happy] Hello world".to_string(),
+            model: Some("fishaudio/s2-pro".to_string()),
+            voice: None,
+            ref_audio: Some("data:audio/wav;base64,AAAA".to_string()),
+            references: vec![],
+            response_format: Some("wav".to_string()),
+            stream: Some(false),
+            speed: Some(1.2),
+            duration_factor: Some(0.8),
+            extra_params: Some(IndexExtraParams {
+                lang: Some("zhen".to_string()),
+                text_normalization: Some(true),
+                emo_text: Some("excited".to_string()),
+                ..Default::default()
+            }),
+            emo_audio: Some("base64_data".to_string()),
+            emo_audio_base64: None,
+            emo_alpha: Some(0.8),
+            emo_vector: Some(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            emo_text: Some("excited".to_string()),
+            use_emo_text: Some(true),
+            lang: Some("ZH".to_string()),
+            text_normalization: Some(true),
+            extra: Default::default(),
+        };
+
+        let payload = normalized_payload(&request, "fishaudio/s2-pro").expect("should normalize");
+        assert_eq!(payload.get("input"), Some(&json!("[happy] Hello world")));
+        assert_eq!(payload.get("speed"), Some(&json!(1.2)));
+        assert_eq!(payload.get("duration_factor"), None);
+        assert_eq!(payload.get("extra_params"), None);
+        assert_eq!(payload.get("ref_audio"), None);
+        assert_eq!(payload.get("emo_audio"), None);
+        assert_eq!(payload.get("emo_alpha"), None);
+        assert_eq!(payload.get("emo_vector"), None);
+        assert_eq!(payload.get("emo_text"), None);
+        assert_eq!(payload.get("use_emo_text"), None);
+        assert_eq!(payload.get("lang"), None);
+        assert_eq!(payload.get("text_normalization"), None);
+    }
+
+    #[test]
+    fn normalized_payload_preserves_index_params_for_index_model() {
+        let request = AudioSpeechRequest {
+            input: "[happy] Hello world".to_string(),
+            model: Some("index-tts-2.5".to_string()),
+            voice: None,
+            ref_audio: None,
+            references: vec![],
+            response_format: Some("wav".to_string()),
+            stream: Some(false),
+            speed: Some(1.2),
+            duration_factor: Some(0.8),
+            extra_params: Some(IndexExtraParams {
+                lang: Some("zhen".to_string()),
+                text_normalization: Some(true),
+                emo_vector: Some(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                emo_alpha: Some(0.8),
+                emo_text: Some("excited".to_string()),
+                use_emo_text: Some(true),
+                emo_audio: Some("base64_data".to_string()),
+                emo_audio_base64: None,
+                extra: Default::default(),
+            }),
+            emo_audio: None,
+            emo_audio_base64: None,
+            emo_alpha: None,
+            emo_vector: None,
+            emo_text: None,
+            use_emo_text: None,
+            lang: None,
+            text_normalization: None,
+            extra: Default::default(),
+        };
+
+        let payload = normalized_payload(&request, "index-tts-2.5").expect("should normalize");
+        assert_eq!(payload.get("input"), Some(&json!("[happy] Hello world")));
+        assert_eq!(payload.get("speed"), Some(&json!(1.2)));
+        assert_eq!(payload.get("duration_factor"), Some(&json!(0.8)));
+        assert_eq!(payload.get("lang"), Some(&json!("zhen")));
+        assert_eq!(payload.get("text_normalization"), Some(&json!(true)));
+        assert_eq!(payload.get("emo_text"), Some(&json!("excited")));
+        assert_eq!(payload.get("use_emo_text"), Some(&json!(true)));
+        let extra = payload.get("extra_params").and_then(|v| v.as_object()).expect("extra_params object");
+        assert_eq!(extra.get("lang"), Some(&json!("zhen")));
+        assert_eq!(extra.get("text_normalization"), Some(&json!(true)));
+        assert_eq!(extra.get("emo_text"), Some(&json!("excited")));
+    }
+
+    #[test]
+    fn validate_speech_parameters_rejects_out_of_bound_values() {
+        let mut request = AudioSpeechRequest {
+            input: "test".to_string(),
+            model: None,
+            voice: None,
+            ref_audio: None,
+            references: vec![],
+            response_format: None,
+            stream: None,
+            speed: Some(0.2),
+            duration_factor: None,
+            extra_params: None,
+            emo_audio: None,
+            emo_audio_base64: None,
+            emo_alpha: None,
+            emo_vector: None,
+            emo_text: None,
+            use_emo_text: None,
+            lang: None,
+            text_normalization: None,
+            extra: Default::default(),
+        };
+        assert!(validate_speech_parameters(&request).is_err());
+
+        request.speed = Some(1.0);
+        request.duration_factor = Some(3.0);
+        assert!(validate_speech_parameters(&request).is_err());
+
+        request.duration_factor = Some(1.0);
+        request.emo_alpha = Some(-0.1);
+        assert!(validate_speech_parameters(&request).is_err());
+
+        request.emo_alpha = Some(0.5);
+        request.emo_vector = Some(vec![1.0, 2.0]);
+        assert!(validate_speech_parameters(&request).is_err());
+
+        request.emo_vector = Some(vec![0.0; 8]);
+        request.lang = Some("INVALID".to_string());
+        assert!(validate_speech_parameters(&request).is_err());
+
+        request.lang = Some("zh".to_string());
+        assert!(validate_speech_parameters(&request).is_ok());
+
+        request.lang = Some("zhen".to_string());
+        assert!(validate_speech_parameters(&request).is_ok());
+
+        // Extra params lang
+        request.lang = None;
+        request.extra_params = Some(IndexExtraParams {
+            lang: Some("zhen".to_string()),
+            ..Default::default()
+        });
+        assert!(validate_speech_parameters(&request).is_ok());
     }
 }
 

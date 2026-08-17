@@ -38,14 +38,40 @@ impl AppState {
         }
     }
 
+    pub async fn supports_model(&self, model: &str) -> bool {
+        for entry in self.workers.iter() {
+            let status = entry.value().status.read().await;
+            if status.models.iter().any(|m| m.eq_ignore_ascii_case(model)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub async fn resolve_target_model(&self, requested_model: Option<&str>) -> String {
+        if let Some(model) = requested_model.map(str::trim).filter(|s| !s.is_empty()) {
+            if self.supports_model(model).await {
+                return model.to_string();
+            }
+            tracing::info!(
+                requested_model = %model,
+                default_model = %self.config.default_model,
+                "requested model not found among online workers, falling back to default model"
+            );
+        }
+        self.config.default_model.clone()
+    }
+
     pub async fn select_worker(
         &self,
+        target_model: &str,
         exclude: &HashSet<String>,
         priority: Priority,
     ) -> AppResult<WorkerHandle> {
         let mut best: Option<(u32, WorkerHandle)> = None;
         let now = Utc::now();
         let mut total = 0_u32;
+        let mut model_mismatch = 0_u32;
         let mut excluded = 0_u32;
         let mut not_ready = 0_u32;
         let mut unhealthy = 0_u32;
@@ -54,13 +80,19 @@ impl AppState {
 
         for entry in self.workers.iter() {
             total += 1;
+            let worker = entry.value().clone();
+            let status = worker.status.read().await.clone();
+
+            if !status.models.iter().any(|m| m.eq_ignore_ascii_case(target_model)) {
+                model_mismatch += 1;
+                continue;
+            }
+
             if exclude.contains(entry.key()) {
                 excluded += 1;
                 continue;
             }
 
-            let worker = entry.value().clone();
-            let status = worker.status.read().await.clone();
             let heartbeat_age_seconds = (now - status.last_heartbeat_at).num_seconds();
             if heartbeat_age_seconds > self.config.worker_heartbeat_stale_after_seconds {
                 stale += 1;
@@ -88,7 +120,9 @@ impl AppState {
 
         best.map(|(_, worker)| worker).ok_or_else(|| {
             tracing::warn!(
+                target_model,
                 total_workers = total,
+                model_mismatch_workers = model_mismatch,
                 excluded_workers = excluded,
                 not_ready_workers = not_ready,
                 unhealthy_workers = unhealthy,
@@ -98,7 +132,7 @@ impl AppState {
                 "no available worker matched selection criteria"
             );
             AppError::TooManyRequests(
-                "All workers are overloaded or unavailable. Please retry later.".to_string(),
+                format!("All workers for model '{target_model}' are overloaded or unavailable. Please retry later."),
             )
         })
     }
@@ -159,6 +193,7 @@ pub struct WorkerStatus {
     pub version: String,
     pub model_id: String,
     pub model_revision: Option<String>,
+    pub models: Vec<String>,
     pub gpu_name: Option<String>,
     pub gpu_count: u32,
     pub vram_total_mb: Option<u64>,
@@ -197,6 +232,11 @@ impl WorkerStatus {
         self.sglang_healthy = heartbeat.sglang_healthy;
         self.inflight = heartbeat.inflight;
         self.queued = heartbeat.queued;
+        if let Some(models) = heartbeat.models {
+            if !models.is_empty() {
+                self.models = models;
+            }
+        }
         self.queued_by_priority = heartbeat.queued_by_priority;
         self.inflight_by_priority = heartbeat.inflight_by_priority;
         self.queued_chars_by_priority = heartbeat.queued_chars_by_priority;

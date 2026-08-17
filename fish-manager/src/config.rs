@@ -15,6 +15,7 @@ pub struct Config {
     pub retry_on_worker_overload: bool,
     pub max_request_body_bytes: usize,
     pub worker_heartbeat_stale_after_seconds: i64,
+    pub default_model: String,
 }
 
 impl Config {
@@ -58,6 +59,10 @@ impl Config {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(30);
+        let default_model = env::var("DEFAULT_MODEL")
+            .unwrap_or_else(|_| "fishaudio/s2-pro".to_string())
+            .trim()
+            .to_string();
 
         Ok(Self {
             bind_addr,
@@ -69,6 +74,7 @@ impl Config {
             retry_on_worker_overload,
             max_request_body_bytes,
             worker_heartbeat_stale_after_seconds,
+            default_model,
         })
     }
 }

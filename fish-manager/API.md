@@ -206,29 +206,81 @@ curl -X POST http://127.0.0.1:8080/v1/audio/speech \
 - worker 未 ready 或 SGLang 不健康时返回 `429`
 - worker 推理失败或断开时返回对应错误，不切换到其他 worker
 
+### 使用 vLLM 兼容格式调用 IndexTTS-2.5
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/audio/speech \
+  -H 'Authorization: Bearer <OPENAI_API_KEY>' \
+  -H 'Content-Type: application/json' \
+  -o output.wav \
+  -d '{
+    "model": "IndexTeam/IndexTTS-2.5",
+    "input": "今天真是令人开心的一天！",
+    "voice": "demo_voice",
+    "speed": 1.5,
+    "response_format": "wav",
+    "extra_params": {
+      "lang": "zh",
+      "text_normalization": true,
+      "emo_vector": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "emo_alpha": 0.8
+    }
+  }'
+```
+
+支持直接使用 `ref_audio` 进行零样本克隆（无需预先保存音色）：
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/audio/speech \
+  -H 'Authorization: Bearer <OPENAI_API_KEY>' \
+  -H 'Content-Type: application/json' \
+  -o output.wav \
+  -d '{
+    "model": "IndexTeam/IndexTTS-2.5",
+    "input": "这是使用内联参考音频的零样本合成测试。",
+    "ref_audio": "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEA...",
+    "speed": 1.0,
+    "extra_params": {
+      "lang": "zhen",
+      "text_normalization": true,
+      "use_emo_text": true,
+      "emo_text": "开心、兴奋而且充满活力",
+      "emo_alpha": 0.8
+    }
+  }'
+```
+
 ### 请求字段
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `input` | string | 是 | 要合成的文本，不能为空 |
+| `input` | string | 是 | 要合成的文本，不能为空。支持 `[happy]你好[sad]世界[]恢复` 情绪标签 |
+| `model` | string | 否 | 目标模型名称（如 `IndexTeam/IndexTTS-2.5`, `fishaudio/s2-pro`），未指定或不存在时自动使用默认模型 |
 | `voice` | string | 否 | 已保存参考音色 ID |
 | `voice_id` | string | 否 | `voice` 的兼容别名 |
-| `references` | array | 否 | 内联参考音频列表 |
-| `response_format` | string | 否 | 输出格式，例如 `wav`、`mp3`、`flac` |
+| `ref_audio` | string | 否 | 零样本克隆音频（支持 data URL、base64、URL 或本地路径） |
+| `references` | array | 否 | 兼容旧版内联参考音频列表 |
+| `response_format` | string | 否 | 输出格式，例如 `wav`、`mp3`、`flac`，默认 `wav` |
 | `stream` | boolean | 否 | 是否流式返回，默认 `false` |
-| `speed` | number | 否 | 语速倍率，范围 `0.5`–`2.0`，默认 `1.0` |
-| 其他字段 | any | 否 | 原样透传给 worker |
+| `speed` | number | 否 | 语速倍率（`0.5`–`2.0`），IndexTTS 默认原生映射为 `duration_factor = 1 / speed` 无损生成 |
+| `duration_factor` | number | 否 | 模型内置时长系数（`0.5`–`2.0`，显式提供时与 `speed` 叠加） |
+| `extra_params` | object | 否 | vLLM 标准 TTS 扩展参数字典（见下表） |
 
-`references[]` 字段：
+`extra_params` 扩展字段（也可在顶层扁平传递）：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `text` | string | 是 | 参考音频对应文本 |
-| `audio_base64` | string | 是 | base64 音频；可以带 `data:...;base64,` 前缀 |
-| `audio` | string | 否 | `audio_base64` 的兼容别名 |
-| `content_type` | string | 否 | 音频 MIME 类型，默认 `audio/wav` |
+| `lang` | string | 否 | 语种代码：`zh`, `en`, `ja`, `es`, `ar`，以及中英混合模式 `zhen`（不区分大小写），默认 `zh` |
+| `text_normalization` | boolean | 否 | 是否启用文本正则化（数字/符号展开），默认 `true` |
+| `emo_vector` | array | 否 | 8 维情感向量 `[happy, angry, sad, afraid, disgusted, melancholic, surprised, calm]` |
+| `emo_alpha` / `emo_weight` | number | 否 | 情感控制强度系数，范围 `0.0`–`1.0`，默认 `0.8` |
+| `emo_text` | string | 否 | 文本情感描述（如 `"开心、兴奋而且充满活力"`） |
+| `use_emo_text` / `auto_emotion` | boolean | 否 | 是否根据文本自动推断情绪 |
+| `emo_audio` | string | 否 | 独立情感参考音频（支持 data URL、base64、URL 或路径） |
 
-成功响应为二进制音频，`Content-Type` 由 worker 返回。
+#### 情感控制优先级（Precedence）
+当同时提供多种情感控制来源时，生效优先级为：
+`use_emo_text`（或文本情绪描述 / 标签） > `emo_vector` > `emo_audio` > 音色原本情感。
 
 ## `POST /v1/tts`
 
@@ -240,11 +292,12 @@ curl -X POST http://127.0.0.1:8080/v1/tts \
   -H 'Content-Type: application/json' \
   -o output.wav \
   -d '{
-    "text": "Hello from fish tts endpoint",
+    "text": "[happy]Hello from fish tts endpoint",
+    "model": "index-tts-2.5",
     "reference_id": "speaker_a",
     "format": "wav",
     "streaming": false,
-    "prosody": {"speed": 1.25},
+    "speed": 1.25,
     "temperature": 0.8,
     "top_p": 0.8
   }'
@@ -255,12 +308,19 @@ curl -X POST http://127.0.0.1:8080/v1/tts \
 | `/v1/tts` 字段 | `/v1/audio/speech` 语义 |
 | --- | --- |
 | `text` | `input` |
+| `model` | `model` |
 | `reference_id` | `voice` |
 | `references` | `references` |
 | `format` | `response_format` |
 | `streaming` | `stream` |
 | `prosody.speed` | Fish Audio 兼容语速倍率（`0.5`–`2.0`） |
 | `speed` | 顶层语速倍率兼容写法，优先于 `prosody.speed` |
+| `duration_factor` | `duration_factor` |
+| `emo_audio` / `emo_audio_base64` | `emo_audio` |
+| `emo_alpha` / `emo_weight` | `emo_alpha` |
+| `emo_vector` | `emo_vector` |
+| `use_emo_text` / `auto_emotion` | `use_emo_text` |
+| `lang` | `lang` |
 | 其他字段 | 原样透传给 worker |
 
 `/v1/tts` 同样支持 `X-Fish-Worker-ID` 指定 worker。
