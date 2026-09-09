@@ -73,7 +73,8 @@ For GPU-size-specific settings and tuning recipes, see [`AUTODL_TUNING.md`](AUTO
 
 - `MANAGER_URL`: manager worker WebSocket endpoint, for example `wss://example.com/internal/workers/ws`.
 - `WORKER_TOKEN`: worker registration token. This is not the public OpenAI API key.
-- `MODEL_ID`: Hugging Face model ID, default `fishaudio/s2-pro`.
+- `MODEL_ID`: model ID advertised to Manager for request routing, default `fishaudio/s2-pro`.
+- `MODEL_DOWNLOAD_ID`: optional Hugging Face checkpoint repo; defaults to `MODEL_ID`. This lets a quantized Worker keep advertising the compatible `fishaudio/s2-pro` API model while downloading another checkpoint artifact.
 - `MODEL_DIR`: local model directory, Docker default `/models/s2-pro`; AutoDL setup writes `/autodl-fs/data/models/s2-pro`.
 - `CACHE_DIR`: runtime cache directory, Docker default `/cache`; AutoDL setup writes `/root/autodl-tmp/cache`.
 - `API_SERVER_HOST` and `API_SERVER_PORT`: managed Fish API server listen address, defaults `0.0.0.0:8000` in Docker and `127.0.0.1:8000` in AutoDL setup.

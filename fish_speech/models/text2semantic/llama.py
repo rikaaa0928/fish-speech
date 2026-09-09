@@ -246,6 +246,207 @@ def _remap_fish_qwen3_omni_keys(weights: OrderedDict) -> OrderedDict:
     return new_weights
 
 
+class FP8Linear(nn.Module):
+    """Weight-only FP8 linear used by pre-quantized S2 checkpoints.
+
+    The checkpoint stores one E4M3 weight matrix and one FP32 scale per output
+    row. Activations and the dequantized matrix use the activation dtype
+    (normally bfloat16), which keeps this implementation dependency-free and
+    compatible with torch.compile on Ada GPUs.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool,
+        device: torch.device | str = "meta",
+    ) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.register_buffer(
+            "qweight",
+            torch.empty(
+                out_features,
+                in_features,
+                dtype=torch.float8_e4m3fn,
+                device=device,
+            ),
+        )
+        self.register_buffer(
+            "scale",
+            torch.empty(out_features, 1, dtype=torch.float32, device=device),
+        )
+        self.bias = (
+            nn.Parameter(torch.empty(out_features, dtype=torch.bfloat16, device=device))
+            if bias
+            else None
+        )
+
+    @property
+    def weight(self) -> Tensor:
+        return self.qweight.to(torch.bfloat16) * self.scale.to(torch.bfloat16)
+
+    def forward(self, x: Tensor) -> Tensor:
+        weight = self.qweight.to(x.dtype) * self.scale.to(x.dtype)
+        return F.linear(x, weight, self.bias)
+
+
+def _fp8_weight_names(checkpoint: Path) -> set[str]:
+    """Return validated FP8 weight keys without materializing checkpoint data."""
+    from safetensors import safe_open
+
+    with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+        keys = set(handle.keys())
+        fp8_weights = {
+            key
+            for key in keys
+            if key.endswith(".weight")
+            and f"{key}.scale" in keys
+            and str(handle.get_slice(key).get_dtype()) == "F8_E4M3"
+        }
+    return fp8_weights
+
+
+def _replace_fp8_linears(model: nn.Module, fp8_weights: set[str]) -> int:
+    restored = 0
+    for weight_name in sorted(fp8_weights):
+        module_name = weight_name.removesuffix(".weight")
+        try:
+            linear = model.get_submodule(module_name)
+        except AttributeError as exc:
+            raise RuntimeError(
+                f"FP8 checkpoint refers to unknown module {module_name!r}"
+            ) from exc
+        if not isinstance(linear, nn.Linear):
+            raise RuntimeError(
+                f"FP8 checkpoint target {module_name!r} is not nn.Linear"
+            )
+        parent_name, _, child_name = module_name.rpartition(".")
+        parent = model.get_submodule(parent_name) if parent_name else model
+        setattr(
+            parent,
+            child_name,
+            FP8Linear(
+                linear.in_features,
+                linear.out_features,
+                bias=linear.bias is not None,
+            ),
+        )
+        restored += 1
+    return restored
+
+
+def _assign_tensor(model: nn.Module, name: str, value: Tensor) -> None:
+    module_name, _, tensor_name = name.rpartition(".")
+    owner = model.get_submodule(module_name) if module_name else model
+    if tensor_name in owner._parameters:
+        previous = owner._parameters[tensor_name]
+        if previous is None:
+            raise RuntimeError(f"Checkpoint unexpectedly contains disabled parameter {name}")
+        if previous.shape != value.shape:
+            raise RuntimeError(
+                f"Shape mismatch for {name}: expected {tuple(previous.shape)}, "
+                f"got {tuple(value.shape)}"
+            )
+        owner._parameters[tensor_name] = nn.Parameter(
+            value, requires_grad=previous.requires_grad
+        )
+    elif tensor_name in owner._buffers:
+        previous = owner._buffers[tensor_name]
+        if previous is not None and previous.shape != value.shape:
+            raise RuntimeError(
+                f"Shape mismatch for {name}: expected {tuple(previous.shape)}, "
+                f"got {tuple(value.shape)}"
+            )
+        owner._buffers[tensor_name] = value
+    else:
+        raise RuntimeError(f"Unexpected tensor in FP8 checkpoint: {name}")
+
+
+def _materialize_inference_buffers(
+    model: nn.Module, config: BaseModelArgs, device: torch.device
+) -> None:
+    # Never restore the checkpoint's 32768x32768 `_buf.causal_mask` (~1 GiB).
+    # These buffers are derived from the configured runtime context cap.
+    model.freqs_cis = precompute_freqs_cis(
+        config.max_seq_len, config.head_dim, config.rope_base
+    ).to(device)
+    model.causal_mask = torch.tril(
+        torch.ones(
+            config.max_seq_len,
+            config.max_seq_len,
+            dtype=torch.bool,
+            device=device,
+        )
+    )
+    if hasattr(model, "fast_freqs_cis"):
+        model.fast_freqs_cis = precompute_freqs_cis(
+            config.num_codebooks,
+            config.fast_head_dim,
+            config.rope_base,
+        ).to(device)
+
+
+def _load_fp8_safetensors(
+    model: nn.Module, checkpoint: Path, device: torch.device
+) -> int:
+    """Stream an FP8 checkpoint into a meta model one tensor at a time."""
+    from safetensors import safe_open
+
+    fp8_weights = _fp8_weight_names(checkpoint)
+    if not fp8_weights:
+        raise RuntimeError(f"No scaled E4M3 linear weights found in {checkpoint}")
+    restored = _replace_fp8_linears(model, fp8_weights)
+
+    skipped_buffers = 0
+    with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+        for checkpoint_name in handle.keys():
+            if checkpoint_name.startswith("_buf."):
+                skipped_buffers += 1
+                continue
+
+            target_name = checkpoint_name
+            if checkpoint_name in fp8_weights:
+                target_name = checkpoint_name.removesuffix(".weight") + ".qweight"
+            elif checkpoint_name.endswith(".weight.scale"):
+                weight_name = checkpoint_name.removesuffix(".scale")
+                if weight_name not in fp8_weights:
+                    raise RuntimeError(
+                        f"Scale has no matching E4M3 weight: {checkpoint_name}"
+                    )
+                target_name = weight_name.removesuffix(".weight") + ".scale"
+
+            value = handle.get_tensor(checkpoint_name)
+            if checkpoint_name in fp8_weights and value.dtype != torch.float8_e4m3fn:
+                raise RuntimeError(
+                    f"Expected E4M3 data for {checkpoint_name}, got {value.dtype}"
+                )
+            if target_name.endswith(".scale") and value.ndim == 1:
+                value = value[:, None]
+            _assign_tensor(model, target_name, value.to(device))
+            del value
+
+    _materialize_inference_buffers(model, model.config, device)
+    meta_tensors = [
+        name
+        for name, value in (*model.named_parameters(), *model.named_buffers())
+        if value.is_meta
+    ]
+    if meta_tensors:
+        raise RuntimeError(
+            "FP8 checkpoint did not materialize model tensors: "
+            + ", ".join(meta_tensors[:10])
+        )
+    logger.info(
+        f"Restored {restored} FP8 linear layers; ignored {skipped_buffers} "
+        "checkpoint-derived runtime buffers"
+    )
+    model._is_fp8_weight_only = True
+    return restored
+
+
 class BaseTransformer(nn.Module):
     def __init__(
         self,
@@ -483,6 +684,7 @@ class BaseTransformer(nn.Module):
         max_length: int | None = None,
         lora_config: LoraConfig | None = None,
         rope_base: int | None = None,
+        device: str | torch.device | None = None,
     ) -> "BaseTransformer":
         # Import wrapper locally to avoid circular dependency or global import issues
         from fish_speech.tokenizer import FishTokenizer
@@ -518,14 +720,32 @@ class BaseTransformer(nn.Module):
                 raise ValueError(f"Unknown model type: {config.model_type}")
 
         logger.info(f"Loading model from {path}, config: {config}")
+        path_obj = Path(path)
+        single_st = path_obj / "model.safetensors"
+        fp8_weights = (
+            _fp8_weight_names(single_st)
+            if load_weights and single_st.exists()
+            else set()
+        )
+        if fp8_weights and lora_config is not None:
+            raise ValueError("LoRA is not supported with pre-quantized FP8 checkpoints")
+
         # Initialize directly on CUDA in bfloat16 to avoid a large transient
         # FP32 model allocation in system RAM on memory-constrained workers.
-        target_device = "cuda" if torch.cuda.is_available() else "cpu"
-        if load_weights and target_device == "cuda":
+        target_device = torch.device(
+            device or ("cuda" if torch.cuda.is_available() else "cpu")
+        )
+        if fp8_weights:
+            logger.info(
+                f"Detected scaled E4M3 checkpoint with {len(fp8_weights)} FP8 layers"
+            )
+            with torch.device("meta"):
+                model = model_cls(config)
+        elif load_weights and target_device.type == "cuda":
             previous_default_dtype = torch.get_default_dtype()
             try:
                 torch.set_default_dtype(torch.bfloat16)
-                with torch.device("cuda"):
+                with torch.device(target_device):
                     model = model_cls(config)
             finally:
                 torch.set_default_dtype(previous_default_dtype)
@@ -536,6 +756,11 @@ class BaseTransformer(nn.Module):
         if load_weights is False:
             logger.info("Randomly initialized model")
         else:
+            if fp8_weights:
+                _load_fp8_safetensors(model, single_st, target_device)
+                logger.info("FP8 checkpoint loaded incrementally")
+                return model
+
             if "int8" in str(Path(path)):
                 logger.info("Using int8 weight-only quantization!")
                 from tools.llama.quantize import WeightOnlyInt8QuantHandler
@@ -553,9 +778,7 @@ class BaseTransformer(nn.Module):
                 simple_quantizer = WeightOnlyInt4QuantHandler(model, groupsize)
                 model = simple_quantizer.convert_for_runtime()
 
-            path_obj = Path(path)
             index_json = path_obj / "model.safetensors.index.json"
-            single_st = path_obj / "model.safetensors"
             pth_file = path_obj / "model.pth"
 
             if index_json.exists():

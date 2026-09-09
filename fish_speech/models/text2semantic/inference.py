@@ -415,10 +415,18 @@ def init_model(checkpoint_path, device, precision, compile=False, max_seq_len=No
         )
 
     model = DualARTransformer.from_pretrained(
-        checkpoint_path, load_weights=True, max_length=max_seq_len
+        checkpoint_path,
+        load_weights=True,
+        max_length=max_seq_len,
+        device=device,
     )
 
-    model = model.to(device=device, dtype=precision)
+    if getattr(model, "_is_fp8_weight_only", False):
+        # FP8 qweights and FP32 row scales must retain their checkpoint dtype.
+        # The loader already streamed every tensor to the requested device.
+        model = model.to(device=device)
+    else:
+        model = model.to(device=device, dtype=precision)
     logger.info(f"Restored model from checkpoint")
 
     if isinstance(model, DualARTransformer):

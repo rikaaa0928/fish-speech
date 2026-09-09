@@ -45,6 +45,7 @@ ENV_HFD_URL="${HFD_URL-}"
 ENV_HFD_TOOL="${HFD_TOOL-}"
 ENV_HFD_THREADS="${HFD_THREADS-}"
 ENV_MODEL_ID="${MODEL_ID-}"
+ENV_MODEL_DOWNLOAD_ID="${MODEL_DOWNLOAD_ID-}"
 ENV_MODEL_REQUIRED_FILES="${MODEL_REQUIRED_FILES-}"
 
 log() {
@@ -82,6 +83,7 @@ restore_env_overrides() {
   if [ -n "${ENV_HFD_TOOL}" ]; then export HFD_TOOL="${ENV_HFD_TOOL}"; fi
   if [ -n "${ENV_HFD_THREADS}" ]; then export HFD_THREADS="${ENV_HFD_THREADS}"; fi
   if [ -n "${ENV_MODEL_ID}" ]; then export MODEL_ID="${ENV_MODEL_ID}"; fi
+  if [ -n "${ENV_MODEL_DOWNLOAD_ID}" ]; then export MODEL_DOWNLOAD_ID="${ENV_MODEL_DOWNLOAD_ID}"; fi
   if [ -n "${ENV_MODEL_REQUIRED_FILES}" ]; then export MODEL_REQUIRED_FILES="${ENV_MODEL_REQUIRED_FILES}"; fi
 }
 

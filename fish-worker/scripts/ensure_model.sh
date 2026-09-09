@@ -4,6 +4,7 @@ set -euo pipefail
 export PATH="${HOME}/.local/bin:${PATH}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 MODEL_ID="${MODEL_ID:-fishaudio/s2-pro}"
+MODEL_DOWNLOAD_ID="${MODEL_DOWNLOAD_ID:-${MODEL_ID}}"
 MODEL_DIR="${MODEL_DIR:-/autodl-fs/data/models/s2-pro}"
 MODEL_REQUIRED_FILES="${MODEL_REQUIRED_FILES:-codec.pth model-00001-of-00002.safetensors model-00002-of-00002.safetensors}"
 HFD_SCRIPT="${HFD_SCRIPT:-/root/autodl-tmp/cache/hfd.sh}"
@@ -76,9 +77,9 @@ if [ ! -s "${HFD_SCRIPT}" ]; then
 fi
 chmod +x "${HFD_SCRIPT}"
 
-echo "downloading ${MODEL_ID} to ${MODEL_DIR} via hfd.sh (${HF_ENDPOINT})"
+echo "downloading ${MODEL_DOWNLOAD_ID} to ${MODEL_DIR} via hfd.sh (${HF_ENDPOINT})"
 # shellcheck disable=SC2086
-bash "${HFD_SCRIPT}" "${MODEL_ID}" --local-dir "${MODEL_DIR}" --tool "${HFD_TOOL}" -x "${HFD_THREADS}" ${HFD_EXTRA_ARGS}
+bash "${HFD_SCRIPT}" "${MODEL_DOWNLOAD_ID}" --local-dir "${MODEL_DIR}" --tool "${HFD_TOOL}" -x "${HFD_THREADS}" ${HFD_EXTRA_ARGS}
 
 if ! model_complete; then
   printf 'model download did not produce required files in %s:\n' "${MODEL_DIR}" >&2

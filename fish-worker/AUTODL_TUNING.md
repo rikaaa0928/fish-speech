@@ -87,6 +87,47 @@ survive the last SSH logout:
 sudo loginctl enable-linger "$USER"
 ```
 
+## RTX 4070 12GB FP8 Profile
+
+The `drbaph/s2-pro-fp8` checkpoint was validated through the complete
+Manager -> Worker -> Fish API server path on the same RTX 4070 SUPER, including
+the `shantianfang` stored reference. Keep the public model ID compatible while
+downloading the quantized artifact separately:
+
+```bash
+MODEL_ID=fishaudio/s2-pro
+MODEL_DOWNLOAD_ID=drbaph/s2-pro-fp8
+MODEL_DIR=/models/s2-pro-fp8
+MODEL_REQUIRED_FILES="codec.pth model.safetensors"
+API_SERVER_COMPILE=1
+API_SERVER_HALF=0
+API_SERVER_DECODER_DTYPE=bfloat16
+API_SERVER_LLAMA_MAX_SEQ_LEN=2560
+API_SERVER_TTS_MAX_NEW_TOKENS=1280
+API_SERVER_MAX_RUNNING_REQUESTS=1
+API_SERVER_WORKERS=1
+PYTORCH_ALLOC_CONF=expandable_segments:True
+```
+
+The FP8 loader detects scaled E4M3 tensors from checkpoint metadata. It streams
+201 quantized linear layers to the GPU and ignores the checkpoint's derived
+32768-token buffers, including its roughly 1 GiB causal mask. LLAMA plus KV
+cache used about 5.09 GiB; adding the BF16 DAC brought idle allocation to about
+5.82 GiB. Hot generation sustained 45.1-45.3 tokens/s, compared with about 26
+tokens/s for the compiled BF16 checkpoint on this GPU.
+
+With a 44-second `shantianfang` reference and fixed seed, 150, 180, 190, and
+200 representative Chinese characters completed when given enough per-request
+generation budget. 210 and 220 characters reached their configured generation
+caps. The conservative `2560/1280` profile accepted a 300-character request,
+returned HTTP 206 after 1280 generated tokens, and did not OOM. Treat about 300
+ordinary Chinese characters as a conservative accepted-input target for this
+specific long reference, and about 160-180 characters as a conservative target
+for complete single-request audio. Both limits vary with reference duration,
+text tokenization, pronunciation, and sampling. Production callers should
+still split externally at sentence boundaries, preferably at no more than 70
+Chinese characters per segment.
+
 ## Important Knobs
 
 `API_SERVER_MAX_RUNNING_REQUESTS`
