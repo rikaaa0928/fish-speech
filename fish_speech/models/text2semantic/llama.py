@@ -518,9 +518,19 @@ class BaseTransformer(nn.Module):
                 raise ValueError(f"Unknown model type: {config.model_type}")
 
         logger.info(f"Loading model from {path}, config: {config}")
-        # Initialize model without passing tokenizer explicitly to __init__
-        model = model_cls(config)
-        # Attach tokenizer to model instance for inference convenience (optional, but good for user scripts)
+        # Initialize directly on CUDA in bfloat16 to avoid a large transient
+        # FP32 model allocation in system RAM on memory-constrained workers.
+        target_device = "cuda" if torch.cuda.is_available() else "cpu"
+        if load_weights and target_device == "cuda":
+            previous_default_dtype = torch.get_default_dtype()
+            try:
+                torch.set_default_dtype(torch.bfloat16)
+                with torch.device("cuda"):
+                    model = model_cls(config)
+            finally:
+                torch.set_default_dtype(previous_default_dtype)
+        else:
+            model = model_cls(config)
         model.tokenizer = tokenizer
 
         if load_weights is False:
@@ -549,16 +559,24 @@ class BaseTransformer(nn.Module):
             pth_file = path_obj / "model.pth"
 
             if index_json.exists():
-                logger.info("Loading sharded safetensors weights")
+                logger.info("Loading sharded safetensors weights incrementally")
                 from safetensors.torch import load_file as st_load_file
 
                 with open(index_json) as f:
                     st_index = json.load(f)
                 shard_files = sorted(set(st_index["weight_map"].values()))
-                weights = OrderedDict()
+                state_dict = model.state_dict()
                 for shard in shard_files:
-                    weights.update(st_load_file(str(path_obj / shard), device="cpu"))
-                weights = _remap_fish_qwen3_omni_keys(weights)
+                    logger.info(f"Loading shard {shard}")
+                    shard_weights = st_load_file(str(path_obj / shard), device="cpu")
+                    shard_weights = _remap_fish_qwen3_omni_keys(shard_weights)
+                    for key, value in shard_weights.items():
+                        if key in state_dict:
+                            state_dict[key].copy_(value)
+                    del shard_weights
+                    if target_device == "cuda":
+                        torch.cuda.empty_cache()
+                weights = None
             elif single_st.exists():
                 logger.info("Loading single safetensors weights")
                 from safetensors.torch import load_file as st_load_file
@@ -584,8 +602,11 @@ class BaseTransformer(nn.Module):
             else:
                 raise FileNotFoundError(f"No model weights found in {path_obj}")
 
-            err = model.load_state_dict(weights, strict=False, assign=True)
-            logger.info(f"Model weights loaded - Status: {err}")
+            if weights is not None:
+                err = model.load_state_dict(weights, strict=False, assign=True)
+                logger.info(f"Model weights loaded - Status: {err}")
+            else:
+                logger.info("Incremental model weights loaded successfully")
 
         if lora_config is not None:
             setup_lora(model, lora_config)

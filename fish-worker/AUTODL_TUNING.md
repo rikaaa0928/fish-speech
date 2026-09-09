@@ -49,6 +49,44 @@ Approximate direct API server single-request results on 4090D:
 | `--compile` bf16 | 248 | 35.61s | 58.56s | OK |
 | `--compile` bf16 | 320 | n/a | n/a | OOM |
 
+## RTX 4070 12GB Profile
+
+The following profile was validated on an RTX 4070 SUPER 12GB with
+`fishaudio/s2-pro` and one request at a time:
+
+```bash
+API_SERVER_COMPILE=1
+API_SERVER_HALF=0
+API_SERVER_DECODER_DTYPE=bfloat16
+API_SERVER_LLAMA_MAX_SEQ_LEN=2560
+API_SERVER_TTS_MAX_NEW_TOKENS=512
+API_SERVER_MAX_RUNNING_REQUESTS=1
+API_SERVER_WORKERS=1
+PYTORCH_ALLOC_CONF=expandable_segments:True
+```
+
+`--compile` sustained about 26 generated tokens/s after warmup, versus about
+11 tokens/s without compilation. The model and BF16 DAC occupied about 9.6 GiB
+after warmup.
+
+Ordinary untagged text is deliberately not split inside Fish Speech. The caller
+must split it before submitting requests. With the `shantianfang` reference,
+fixed seed, and the profile above, a representative 96-character Chinese input
+completed as one batch (497 generated tokens), while the corresponding
+97-character input reached the 512-token generation cap and the DAC decode ran
+out of memory. This boundary depends on text, pronunciation, and sampling, so
+use at most 70 Chinese characters per external segment rather than treating 96
+as a safe production limit. Prefer sentence punctuation and retain punctuation
+when splitting.
+
+The rootless Podman deployment uses NVIDIA CDI (`nvidia.com/gpu=all`) and omits
+`shm_size` when `ipc: host` is set. Enable user lingering if the worker must
+survive the last SSH logout:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
 ## Important Knobs
 
 `API_SERVER_MAX_RUNNING_REQUESTS`

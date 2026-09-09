@@ -58,7 +58,7 @@ RAS_HIGH_TOP_P = 0.9
 # Minimum / alignment rule for an explicit LLAMA context cap
 # (--llama-max-seq-len). The floor keeps headroom for a typical prompt plus
 # the reserved generation space; anything else fails at startup on purpose.
-MIN_LLAMA_MAX_SEQ_LEN = 4096
+MIN_LLAMA_MAX_SEQ_LEN = 2560
 
 
 def logits_to_probs(

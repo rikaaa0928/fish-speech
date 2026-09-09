@@ -330,7 +330,12 @@ class Worker:
         if not healthy:
             return HealthCheck(False, detail, gpu, api_server_failure=True)
 
-        if self.config.require_gpu:
+        # A subprocess CUDA probe creates a second CUDA context. On a nearly
+        # full 12 GB card it can consume enough VRAM to interfere with a healthy
+        # inference that starts while the probe is running. Periodic health uses
+        # nvidia-smi plus the real API check; reserve the tiny op for an explicit
+        # forced diagnostic.
+        if self.config.require_gpu and force_cuda_probe:
             cuda_ok, cuda_detail = await self.cuda_tiny_op_health(force=force_cuda_probe)
             if not cuda_ok:
                 return HealthCheck(False, f"cuda_unavailable: {cuda_detail}", gpu, gpu_failure=True)
