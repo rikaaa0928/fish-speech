@@ -8,12 +8,13 @@ The current FP32 codec default, validated on RTX 3090 24GB with one concurrent r
 
 ```bash
 API_SERVER_LLAMA_MAX_SEQ_LEN=8192
-API_SERVER_TTS_MAX_NEW_TOKENS=4096
 API_SERVER_MAX_RUNNING_REQUESTS=1
 API_SERVER_WORKERS=1
 ```
 
 The application layer should limit normal Chinese input to about 400 characters. Generation-limit truncation returns HTTP 206 with `X-TTS-Error-Code: tts_output_truncated`; GPU OOM returns an explicit `tts_out_of_memory` error through the manager.
+When a request omits `max_new_tokens`, its generation budget is the LLAMA
+context remaining after the actual prompt is encoded.
 
 ## Historical Baseline
 
@@ -24,7 +25,6 @@ API_SERVER_COMPILE=1
 API_SERVER_HALF=0
 API_SERVER_MAX_RUNNING_REQUESTS=1
 API_SERVER_MAX_QUEUED_REQUESTS=1
-API_SERVER_TTS_MAX_NEW_TOKENS=1024
 API_SERVER_WORKERS=1
 PYTORCH_ALLOC_CONF=expandable_segments:True
 ```
@@ -59,7 +59,6 @@ API_SERVER_COMPILE=1
 API_SERVER_HALF=0
 API_SERVER_DECODER_DTYPE=bfloat16
 API_SERVER_LLAMA_MAX_SEQ_LEN=2560
-API_SERVER_TTS_MAX_NEW_TOKENS=512
 API_SERVER_MAX_RUNNING_REQUESTS=1
 API_SERVER_WORKERS=1
 PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -69,7 +68,8 @@ PYTORCH_ALLOC_CONF=expandable_segments:True
 11 tokens/s without compilation. The model and BF16 DAC occupied about 9.6 GiB
 after warmup.
 
-Ordinary untagged text is deliberately not split inside Fish Speech. The caller
+The boundary test explicitly requested `max_new_tokens=512`. Ordinary untagged
+text is deliberately not split inside Fish Speech. The caller
 must split it before submitting requests. With the `shantianfang` reference,
 fixed seed, and the profile above, a representative 96-character Chinese input
 completed as one batch (497 generated tokens), while the corresponding
@@ -103,7 +103,6 @@ API_SERVER_COMPILE=1
 API_SERVER_HALF=0
 API_SERVER_DECODER_DTYPE=bfloat16
 API_SERVER_LLAMA_MAX_SEQ_LEN=2560
-API_SERVER_TTS_MAX_NEW_TOKENS=1280
 API_SERVER_MAX_RUNNING_REQUESTS=1
 API_SERVER_WORKERS=1
 PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -116,10 +115,11 @@ cache used about 5.09 GiB; adding the BF16 DAC brought idle allocation to about
 5.82 GiB. Hot generation sustained 45.1-45.3 tokens/s, compared with about 26
 tokens/s for the compiled BF16 checkpoint on this GPU.
 
-With a 44-second `shantianfang` reference and fixed seed, 150, 180, 190, and
+These boundary tests explicitly requested up to `max_new_tokens=1280`. With a
+44-second `shantianfang` reference and fixed seed, 150, 180, 190, and
 200 representative Chinese characters completed when given enough per-request
 generation budget. 210 and 220 characters reached their configured generation
-caps. The conservative `2560/1280` profile accepted a 300-character request,
+caps. The conservative `max_seq_len=2560`, `max_new_tokens=1280` test accepted a 300-character request,
 returned HTTP 206 after 1280 generated tokens, and did not OOM. Treat about 300
 ordinary Chinese characters as a conservative accepted-input target for this
 specific long reference, and about 160-180 characters as a conservative target
@@ -138,9 +138,13 @@ Controls worker-local running requests. Keep this at `1` on 24GB GPUs unless you
 
 Controls worker-local queued requests. The default is `1`. Set `0` to reject overload immediately. When the queue is full, the worker returns retryable `overloaded` to the manager.
 
-`API_SERVER_TTS_MAX_NEW_TOKENS`
+`max_new_tokens` request field
 
-Sets the default output-token limit for worker-forwarded requests. A client-provided `max_new_tokens` still wins. Lower values reduce worst-case decode time and help avoid long-request memory pressure. Higher values allow longer audio but can increase latency and OOM risk.
+This optional per-request field caps generated audio tokens. When it is omitted,
+Fish uses `API_SERVER_LLAMA_MAX_SEQ_LEN - prompt_tokens`, based on the prompt
+after reference audio, reference text, and inference text are encoded. Explicit
+values still take precedence and are rejected if prompt plus generation would
+exceed the context.
 
 `API_SERVER_COMPILE`
 
@@ -167,7 +171,6 @@ API_SERVER_COMPILE=1 \
 API_SERVER_HALF=0 \
 API_SERVER_MAX_RUNNING_REQUESTS=1 \
 API_SERVER_MAX_QUEUED_REQUESTS=1 \
-API_SERVER_TTS_MAX_NEW_TOKENS=4096 \
 API_SERVER_LLAMA_MAX_SEQ_LEN=8192 \
 API_SERVER_WORKERS=1 \
 PYTORCH_ALLOC_CONF=expandable_segments:True \
@@ -213,7 +216,7 @@ Try these in order:
 1. Set `API_SERVER_HALF=0`.
 2. Set `API_SERVER_WORKERS=1`.
 3. Set `API_SERVER_COMPILE=0`.
-4. Lower `API_SERVER_TTS_MAX_NEW_TOKENS`, for example `4096 -> 3072`.
+4. Have the client send a smaller `max_new_tokens` for unusually risky requests.
 5. Keep `API_SERVER_MAX_RUNNING_REQUESTS=1`; lower `API_SERVER_MAX_QUEUED_REQUESTS` to `0` if overload should be rejected immediately.
 6. Check for orphan GPU processes with `nvidia-smi` and stop only stale worker/API server processes from the previous run.
 

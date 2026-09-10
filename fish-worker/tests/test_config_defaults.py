@@ -17,7 +17,6 @@ class ConfigDefaultsTests(unittest.TestCase):
         config = Config.from_env()
 
         self.assertEqual(config.api_server_llama_max_seq_len, 8192)
-        self.assertEqual(config.api_server_tts_max_new_tokens, 4096)
 
     @patch.dict(
         os.environ,
@@ -25,7 +24,6 @@ class ConfigDefaultsTests(unittest.TestCase):
             "MANAGER_URL": "ws://manager.test",
             "WORKER_TOKEN": "test-token",
             "API_SERVER_LLAMA_MAX_SEQ_LEN": "",
-            "API_SERVER_TTS_MAX_NEW_TOKENS": "",
         },
         clear=True,
     )
@@ -33,7 +31,6 @@ class ConfigDefaultsTests(unittest.TestCase):
         config = Config.from_env()
 
         self.assertIsNone(config.api_server_llama_max_seq_len)
-        self.assertIsNone(config.api_server_tts_max_new_tokens)
 
 
 if __name__ == "__main__":

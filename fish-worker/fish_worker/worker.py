@@ -584,8 +584,6 @@ class Worker:
         try:
             payload = api_server_payload(dict(request.get("payload") or {}), stream=bool(request.get("stream")))
             input_text = payload.get("text") or ""
-            if self.config.api_server_tts_max_new_tokens is not None:
-                payload.setdefault("max_new_tokens", self.config.api_server_tts_max_new_tokens)
             refs = []
             request_references = request.get("references") or []
             api_reference_id: str | None = None

@@ -33,16 +33,16 @@ if hasattr(torch._inductor.config, "fx_graph_cache"):
 
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
+from fish_speech.models.text2semantic.context import (
+    ContextLengthExceededError,
+    resolve_generation_budget,
+)
 from fish_speech.models.text2semantic.llama import (
     BaseModelArgs,
     BaseTransformer,
     DualARTransformer,
     NaiveTransformer,
 )
-
-
-class ContextLengthExceededError(ValueError):
-    """The requested prompt and generation exceed the loaded context cap."""
 
 
 def multinomial_sample_one_no_sync(probs_sort):
@@ -611,7 +611,7 @@ def generate_long(
     decode_one_token: Callable,
     text: str,
     num_samples: int = 1,
-    max_new_tokens: int = 0,
+    max_new_tokens: Optional[int] = None,
     top_p: float = 0.9,
     top_k: int = 30,
     repetition_penalty: float = 1.1,
@@ -754,21 +754,18 @@ def generate_long(
             encoded = encoded.to(device=device)
             prompt_length = encoded.size(1)
 
-            # Validate against the request's actual generation length instead of
-            # a hardcoded reservation. Rejects before generate() silently clamps.
-            if max_new_tokens and prompt_length + max_new_tokens > max_length:
-                raise ContextLengthExceededError(
-                    f"Requested sequence exceeds the LLAMA context limit: "
-                    f"prompt={prompt_length} tokens + generation={max_new_tokens} tokens "
-                    f"= {prompt_length + max_new_tokens}, but max_seq_len={max_length}. "
-                    f"Maximum acceptable generation length here: "
-                    f"{max_length - prompt_length} tokens."
-                )
+            # An omitted limit consumes exactly the context remaining after the
+            # real prompt (reference audio/text plus inference text) is encoded.
+            # Explicit oversized values are rejected before generate() can
+            # silently clamp them.
+            effective_max_new_tokens = resolve_generation_budget(
+                max_length, prompt_length, max_new_tokens
+            )
 
             y = generate(
                 model=model,
                 prompt=encoded,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=effective_max_new_tokens,
                 audio_masks=audio_masks,
                 audio_parts=audio_parts,
                 decode_one_token=decode_one_token,
@@ -828,7 +825,7 @@ def generate_long(
                 text=batch_text,
                 finish_reason=finish_reason,
                 generated_tokens=tokens_generated,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=effective_max_new_tokens,
             )
 
             if finish_reason == "length":
@@ -836,7 +833,7 @@ def generate_long(
                     action="next",
                     finish_reason="length",
                     generated_tokens=tokens_generated,
-                    max_new_tokens=max_new_tokens,
+                    max_new_tokens=effective_max_new_tokens,
                 )
                 return
 

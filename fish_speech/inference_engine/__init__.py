@@ -96,6 +96,7 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         segment_count = 0
         finish_reason = "stop"
         generated_tokens = 0
+        effective_max_new_tokens = req.max_new_tokens
 
         while True:
             # Get the response from the LLAMA model
@@ -119,6 +120,8 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 )
 
             result: GenerateResponse = wrapped_result.response
+            if result.max_new_tokens:
+                effective_max_new_tokens = result.max_new_tokens
             if result.action != "next":
                 segment = self.get_audio_segment(result)
                 segment_count += 1
@@ -164,7 +167,7 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 error=None,
                 finish_reason=finish_reason,
                 generated_tokens=generated_tokens,
-                max_new_tokens=req.max_new_tokens,
+                max_new_tokens=effective_max_new_tokens,
                 input_characters=len(req.text),
             )
         else:
@@ -182,7 +185,7 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 error=None,
                 finish_reason=finish_reason,
                 generated_tokens=generated_tokens,
-                max_new_tokens=req.max_new_tokens,
+                max_new_tokens=effective_max_new_tokens,
                 input_characters=len(req.text),
             )
 

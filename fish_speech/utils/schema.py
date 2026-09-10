@@ -107,9 +107,10 @@ class ServeTTSRequest(BaseModel):
     normalize: bool = True
     # not usually used below
     streaming: bool = False
-    # Positive-only: negatives would break sampling, and oversized values are
-    # rejected at inference time against the loaded LLAMA context cap.
-    max_new_tokens: Annotated[int, Field(ge=1)] = 4096
+    # When omitted, inference uses all context tokens remaining after the
+    # request's prompt has been encoded. Explicit values remain positive-only
+    # and are validated against the loaded LLAMA context cap.
+    max_new_tokens: Annotated[int, Field(ge=1)] | None = None
     top_p: Annotated[float, Field(ge=0.1, le=1.0, strict=True)] = 0.8
     repetition_penalty: Annotated[float, Field(ge=0.9, le=2.0, strict=True)] = 1.1
     temperature: Annotated[float, Field(ge=0.1, le=1.0, strict=True)] = 0.8

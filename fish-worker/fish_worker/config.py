@@ -66,7 +66,6 @@ class Config:
     api_server_max_running_requests: int
     api_server_max_queued_requests: int
     api_server_max_queued_requests_by_priority: dict[Priority, int]
-    api_server_tts_max_new_tokens: int | None
     api_server_llama_max_seq_len: int | None
     api_server_decoder_checkpoint_path: Path
     api_server_decoder_config_name: str
@@ -127,9 +126,6 @@ class Config:
             api_server_max_running_requests=max(1, env_int("API_SERVER_MAX_RUNNING_REQUESTS", 1)),
             api_server_max_queued_requests=v3_queue_limit,
             api_server_max_queued_requests_by_priority=priority_queue_limits(v3_queue_limit),
-            api_server_tts_max_new_tokens=env_optional_int(
-                "API_SERVER_TTS_MAX_NEW_TOKENS", 4096
-            ),
             api_server_llama_max_seq_len=env_optional_int(
                 "API_SERVER_LLAMA_MAX_SEQ_LEN", 8192
             ),

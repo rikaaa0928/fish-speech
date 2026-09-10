@@ -37,9 +37,6 @@ fi
 if [ -z "${API_SERVER_MAX_QUEUED_REQUESTS+x}" ]; then
   export API_SERVER_MAX_QUEUED_REQUESTS=1
 fi
-if [ -z "${API_SERVER_TTS_MAX_NEW_TOKENS+x}" ]; then
-  export API_SERVER_TTS_MAX_NEW_TOKENS=4096
-fi
 # Worker deployment pins the LLAMA context cap to 8192 (multiple of 8) to cut
 # the one-time 32768-token KV cache + causal-mask VRAM. To keep the
 # checkpoint's original cap, explicitly set it to an empty string:
