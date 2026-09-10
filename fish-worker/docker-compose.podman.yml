@@ -1,0 +1,18 @@
+services:
+  fish-worker:
+    build:
+      context: ..
+      dockerfile: fish-worker/Dockerfile
+    image: fish-worker-fish-worker:latest
+    restart: unless-stopped
+    devices:
+      - nvidia.com/gpu=all
+    ipc: host
+    env_file:
+      - .env
+    ports:
+      - "9281:${API_SERVER_PORT:-8000}"
+    volumes:
+      - ${HOST_MODEL_DIR:-./models}:${CONTAINER_MODEL_DIR:-/models}
+      - ${HOST_CACHE_DIR:-./cache}:${CONTAINER_CACHE_DIR:-/cache}
+      - ${HOST_REFERENCES_DIR:-./references}:${CONTAINER_REFERENCES_DIR:-/app/references}
